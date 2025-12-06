@@ -36,6 +36,7 @@ class RemoteControlClient:
         self.display_scale = 1.0
         
         # Relay and server info
+        self.relay_url = "wss://remote-control-rlunch--fahd4alj.replit.app:5000"
         self.server_id = "my_computer"
         
         # Create UI
@@ -54,13 +55,13 @@ class RemoteControlClient:
         
         # Connection controls
         tk.Label(control_frame, text="Relay URL:", bg='#2b2b2b', fg='white').pack(side=tk.LEFT, padx=5)
-        self.url_entry = tk.Entry(control_frame, width=30)
-        self.url_entry.insert(0, "ws://localhost:8765")
+        self.url_entry = tk.Entry(control_frame, width=40)
+        self.url_entry.insert(0, self.relay_url)
         self.url_entry.pack(side=tk.LEFT, padx=5)
         
         tk.Label(control_frame, text="Server ID:", bg='#2b2b2b', fg='white').pack(side=tk.LEFT, padx=5)
         self.server_entry = tk.Entry(control_frame, width=15)
-        self.server_entry.insert(0, "my_computer")
+        self.server_entry.insert(0, self.server_id)
         self.server_entry.pack(side=tk.LEFT, padx=5)
         
         self.connect_btn = tk.Button(control_frame, text="Connect", command=self.toggle_connection, 
