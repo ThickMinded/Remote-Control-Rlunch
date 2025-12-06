@@ -220,7 +220,7 @@ class RelayServer:
 
 def main():
     """Main entry point"""
-    relay = RelayServer(host='0.0.0.0', port=5000)
+    relay = RelayServer(host='0.0.0.0', port=8080)
     
     try:
         asyncio.run(relay.start())

@@ -25,7 +25,7 @@ pyautogui.FAILSAFE = True
 pyautogui.PAUSE = 0.01
 
 class RemoteControlServer:
-    def __init__(self, relay_url='wss://remote-control-rlunch--fahd4alj.replit.app:5000', server_id='my_computer'):
+    def __init__(self, relay_url='wss://remote-control-rlunch--fahd4alj.replit.app:8080', server_id='my_computer'):
         self.relay_url = relay_url
         self.server_id = server_id
         self.websocket = None
