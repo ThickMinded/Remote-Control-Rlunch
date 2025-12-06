@@ -1,0 +1,8 @@
+run = "python relay.py"
+entrypoint = "relay.py"
+
+[nix]
+channel = "stable-23_05"
+
+[deployment]
+run = ["sh", "-c", "python relay.py"]
