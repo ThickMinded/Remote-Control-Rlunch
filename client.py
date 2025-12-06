@@ -36,7 +36,7 @@ class RemoteControlClient:
         self.display_scale = 1.0
         
         # Relay and server info
-        self.relay_url = "wss://remote-control-rlunch--fahd4alj.replit.app:8080"
+        self.relay_url = "wss://remote-control-rlunch--fahd4alj.replit.app"
         self.server_id = "my_computer"
         
         # Create UI

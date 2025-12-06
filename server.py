@@ -24,8 +24,11 @@ logger = logging.getLogger(__name__)
 pyautogui.FAILSAFE = True
 pyautogui.PAUSE = 0.01
 
+DEFAULT_RELAY_URL = "wss://remote-control-rlunch--fahd4alj.replit.app"
+
+
 class RemoteControlServer:
-    def __init__(self, relay_url='wss://remote-control-rlunch--fahd4alj.replit.app:8080', server_id='my_computer'):
+    def __init__(self, relay_url=DEFAULT_RELAY_URL, server_id='my_computer'):
         self.relay_url = relay_url
         self.server_id = server_id
         self.websocket = None
@@ -236,7 +239,7 @@ def main():
     else:
         relay_url = input("Enter Replit relay URL (or press Enter for default): ").strip()
         if not relay_url:
-            relay_url = "ws://localhost:8765"  # For testing locally
+            relay_url = DEFAULT_RELAY_URL
     
     # Get server ID
     if len(sys.argv) > 2:
