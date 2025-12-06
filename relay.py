@@ -221,8 +221,8 @@ class RelayServer:
 
 def main():
     """Main entry point"""
-    # Replit sets PORT; fall back to 8000 for local/dev
-    port = int(os.getenv("PORT", "8000"))
+    # Use port 5000 for Replit (publicly accessible port)
+    port = int(os.getenv("PORT", "5000"))
     relay = RelayServer(host='0.0.0.0', port=port)
 
     try:
