@@ -36,7 +36,7 @@ class RemoteControlClient:
         self.display_scale = 1.0
         
         # Relay and server info
-        self.relay_url = "wss://your-app-name.onrender.com"
+        self.relay_url = "wss://remote-control-relay.up.railway.app"
         self.server_id = "my_computer"
         
         # Create UI

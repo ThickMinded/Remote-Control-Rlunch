@@ -106,14 +106,14 @@ class RelayServer:
 
 async def main():
     """Start the relay server"""
-    # Render provides PORT environment variable
-    port = int(os.environ.get('PORT', 10000))
+    # Railway provides PORT environment variable
+    port = int(os.environ.get('PORT', 8000))
     host = '0.0.0.0'
     
     relay = RelayServer()
     
     logger.info("=" * 70)
-    logger.info("🌐 Remote Control Relay Server (Render.com)")
+    logger.info("🌐 Remote Control Relay Server (Railway.app)")
     logger.info("=" * 70)
     logger.info(f"Starting relay on {host}:{port}")
     logger.info("=" * 70)
@@ -126,7 +126,7 @@ async def main():
         ping_timeout=10,
         max_size=10*1024*1024
     ):
-        logger.info("✅ Relay server is running on Render!")
+        logger.info("✅ Relay server is running on Railway!")
         logger.info("Waiting for servers and clients to connect...")
         await asyncio.Future()  # Run forever
 
