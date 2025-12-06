@@ -1,8 +1,8 @@
-run = "python3 relay.py"
+run = "pip install -q websockets && python3 relay.py"
 entrypoint = "relay.py"
 
 [nix]
 channel = "stable-23_05"
 
 [deployment]
-run = ["sh", "-c", "python3 relay.py"]
+run = ["sh", "-c", "pip install -q websockets && python3 relay.py"]
