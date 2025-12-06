@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 pyautogui.FAILSAFE = True
 pyautogui.PAUSE = 0.01
 
-DEFAULT_RELAY_URL = "wss://remote-control-rlunch--fahd4alj.replit.app"
+DEFAULT_RELAY_URL = "wss://your-app-name.onrender.com"
 
 
 class RemoteControlServer:
