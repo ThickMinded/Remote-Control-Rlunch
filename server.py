@@ -19,7 +19,8 @@ import sys
 import pyperclip
 from pynput import keyboard
 import tkinter as tk
-from threading import Thread
+from threading import Thread, Event
+from queue import Queue, Empty
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -42,35 +43,128 @@ class RemoteControlServer:
         
         # Communication mode state
         self.communication_mode = False
-        self.communication_buffer = ""
         self.keyboard_listener = None
         self.current_client_id = None
         self.event_loop = None  # Store the asyncio event loop
         self.comm_window = None  # Communication input window
+        self.comm_thread = None
+        self.comm_thread_ready = Event()
+        self.comm_command_queue = Queue()
+        self._start_communication_window_thread()
         
+    def _start_communication_window_thread(self):
+        """Start background thread that owns the tkinter communication window"""
+        if self.comm_thread and self.comm_thread.is_alive():
+            return
+        self.comm_thread = Thread(target=self._communication_window_worker, daemon=True)
+        self.comm_thread.start()
+        # Wait until tkinter window is ready before allowing toggles
+        self.comm_thread_ready.wait()
+
+    def _communication_window_worker(self):
+        """Create tkinter window and process show/hide commands in dedicated thread"""
+        import time
+
+        window = tk.Tk()
+        window.withdraw()  # Start hidden
+        window.title("Communication Mode Active")
+        window.attributes('-alpha', 0.01)
+        window.attributes('-topmost', True)
+        window.attributes('-fullscreen', True)
+        window.overrideredirect(True)
+
+        text_widget = tk.Text(window, width=1, height=1, bg='black')
+        text_widget.pack()
+
+        # Store reference so cleanup can detect
+        self.comm_window = window
+
+        # Bind key events once; they only send while communication mode is enabled
+        last_key_time = [0]
+
+        def on_key(event):
+            current_time = time.time()
+            if current_time - last_key_time[0] < 0.01:
+                return "break"
+            last_key_time[0] = current_time
+
+            if not self.communication_mode:
+                return "break"
+
+            char = event.char
+            keysym = event.keysym
+
+            if char and char.isprintable():
+                self.send_communication_text(char)
+            elif keysym == 'BackSpace':
+                self.send_communication_text('\b')
+            elif keysym == 'Return':
+                self.send_communication_text('\n')
+            elif keysym == 'space':
+                self.send_communication_text(' ')
+
+            return "break"
+
+        text_widget.bind('<KeyPress>', on_key)
+
+        after_handle = {'id': None}
+
+        def process_commands():
+            try:
+                while True:
+                    command = self.comm_command_queue.get_nowait()
+                    if command == 'show':
+                        window.deiconify()
+                        window.lift()
+                        window.attributes('-topmost', True)
+                        window.focus_force()
+                        text_widget.focus_set()
+                    elif command == 'hide':
+                        window.withdraw()
+                    elif command == 'shutdown':
+                        if after_handle['id'] is not None:
+                            try:
+                                window.after_cancel(after_handle['id'])
+                            except tk.TclError:
+                                pass
+                        window.withdraw()
+                        window.quit()
+                        window.destroy()
+                        return
+            except Empty:
+                pass
+
+            # Keep focus while window is visible and mode is active
+            if window.state() == 'normal' and self.communication_mode:
+                window.lift()
+                window.attributes('-topmost', True)
+                window.focus_force()
+                text_widget.focus_set()
+
+            after_handle['id'] = window.after(80, process_commands)
+
+        self.comm_thread_ready.set()
+        process_commands()
+        window.mainloop()
+
     async def capture_screen(self, quality=95, scale=1.0):
-        """Capture screen and return as base64 encoded JPEG"""
+        """Capture screen without blocking the main asyncio loop"""
+        return await asyncio.to_thread(self._capture_screen_sync, quality, scale)
+
+    def _capture_screen_sync(self, quality=95, scale=1.0):
+        """Synchronous portion of screen capture (runs in worker thread)"""
         try:
             with mss.mss() as sct:
                 monitor = sct.monitors[1]  # Primary monitor
                 screenshot = sct.grab(monitor)
-                
-                # Convert to PIL Image
                 img = Image.frombytes('RGB', screenshot.size, screenshot.rgb)
-                
-                # Scale down for better performance
                 new_size = (int(img.width * scale), int(img.height * scale))
                 if scale != 1.0:
                     img = img.resize(new_size, Image.Resampling.NEAREST)
-                
-                # Compress as JPEG
                 buffer = io.BytesIO()
                 img.save(buffer, format='JPEG', quality=quality, optimize=True)
                 img_bytes = buffer.getvalue()
-                
-                # Encode to base64
                 img_base64 = base64.b64encode(img_bytes).decode('utf-8')
-                
                 return {
                     'type': 'screen',
                     'data': img_base64,
@@ -224,7 +318,6 @@ class RemoteControlServer:
         self.communication_mode = enabled
         if enabled:
             logger.info("🗨️ Communication mode ENABLED - typing will be sent to client")
-            self.communication_buffer = ""
             # Open invisible input window
             self.open_communication_window()
             # Send notification to client using thread-safe method
@@ -246,121 +339,40 @@ class RemoteControlServer:
                     self.send_communication_notification(False), 
                     self.event_loop
                 )
-            self.communication_buffer = ""
     
     def open_communication_window(self):
-        """Open an invisible focused window for communication input"""
-        import time
-        
-        # First, simulate a click on empty space to remove focus from any text box
-        try:
-            import pyautogui
-            # Click on a corner of the screen to remove focus
-            pyautogui.click(5, 5)
-            time.sleep(0.05)
-        except:
-            pass
-        
-        def create_window():
-            # Small delay to ensure click is processed
-            time.sleep(0.1)
-            
-            window = tk.Tk()
-            window.title("Communication Mode Active")
-            
-            # Make window fullscreen and invisible
-            window.attributes('-alpha', 0.01)  # Almost invisible
-            window.attributes('-topmost', True)  # Always on top
-            window.attributes('-fullscreen', True)  # Fullscreen to block everything
-            window.overrideredirect(True)  # No window decorations
-            
-            # Store reference
-            self.comm_window = window
-            
-            # Create text widget to capture input
-            text_widget = tk.Text(window, width=1, height=1, bg='black')
-            text_widget.pack()
-            
-            # Force focus to this window aggressively
-            window.update()
-            window.lift()
-            window.focus_force()
-            text_widget.focus_set()
-            window.update()
-            
-            # Bind key events - only send when communication mode is active
-            last_key_time = [0]  # Use list to allow modification in nested function
-            
-            def on_key(event):
-                import time
-                current_time = time.time()
-                
-                # Prevent double key events (tkinter can fire twice)
-                if current_time - last_key_time[0] < 0.01:
-                    return "break"
-                
-                last_key_time[0] = current_time
-                
-                # Only send if communication mode is active
-                if not self.communication_mode:
-                    return "break"  # Still block the key from typing
-                
-                char = event.char
-                keysym = event.keysym
-                
-                if char and char.isprintable():  # Regular printable character
-                    self.communication_buffer += char
-                elif keysym == 'BackSpace':
-                    self.communication_buffer += '\b'
-                elif keysym == 'Return':
-                    self.communication_buffer += '\n'
-                elif keysym == 'space':
-                    self.communication_buffer += ' '
-                
-                return "break"  # Always block the key from typing in widget
-            
-            text_widget.bind('<KeyPress>', on_key)
-            
-            # Keep window alive while communication mode is active
-            def keep_focus():
-                try:
-                    if self.communication_mode and self.comm_window is window:
-                        window.lift()
-                        window.attributes('-topmost', True)
-                        window.focus_force()
-                        text_widget.focus_set()
-                        window.after(100, keep_focus)
-                    else:
-                        # Communication mode disabled, close window
-                        window.quit()
-                        window.destroy()
-                except tk.TclError:
-                    pass
-                except:
-                    pass
-            
-            keep_focus()
-            
-            try:
-                window.mainloop()
-            except:
-                pass
-            finally:
-                try:
-                    window.destroy()
-                except:
-                    pass
-        
-        # Run in separate thread
-        thread = Thread(target=create_window, daemon=True)
-        thread.start()
+        """Show the persistent communication window (executed in Tk thread)"""
+        if self.comm_command_queue:
+            self.comm_command_queue.put('show')
     
     def close_communication_window(self):
         """Close the communication window"""
-        # Just set flag to False - the keep_focus loop will handle cleanup
-        # This prevents Tcl_AsyncDelete error from cross-thread operations
+        if self.comm_command_queue:
+            self.comm_command_queue.put('hide')
+
+    def shutdown_communication_window(self):
+        """Completely stop the communication window thread"""
         self.communication_mode = False
-        self.comm_window = None
+        if self.comm_command_queue:
+            self.comm_command_queue.put('shutdown')
+
+    def send_communication_text(self, text):
+        """Send communication text to client immediately over existing websocket"""
+        if not text:
+            return
+        if self.websocket and self.current_client_id and self.event_loop:
+            message = {
+                'type': 'communication_text',
+                'text': text,
+                'target_client': self.current_client_id
+            }
+            try:
+                asyncio.run_coroutine_threadsafe(
+                    self.websocket.send(json.dumps(message)),
+                    self.event_loop
+                )
+            except Exception as e:
+                logger.error(f"Failed to send communication text: {e}")
     
     async def send_communication_notification(self, enabled):
         """Send communication mode status to client"""
@@ -429,10 +441,6 @@ class RemoteControlServer:
                         )
                         if frame and client_id:
                             frame['target_client'] = client_id
-                            # Include communication text in frame if available
-                            if self.communication_buffer:
-                                frame['communication_text'] = self.communication_buffer
-                                self.communication_buffer = ""  # Clear after sending
                             await self.websocket.send(json.dumps(frame))
                     elif msg_type == 'info_request':
                         # Send screen info to requesting client
@@ -546,8 +554,7 @@ def main():
         logger.error(f"Server error: {e}")
     finally:
         # Cleanup resources
-        if server.comm_window:
-            server.close_communication_window()
+        server.shutdown_communication_window()
         if server.keyboard_listener:
             try:
                 server.keyboard_listener.stop()

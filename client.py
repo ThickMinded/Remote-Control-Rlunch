@@ -55,6 +55,7 @@ class RemoteControlClient:
         # Communication mode
         self.communication_mode = False
         self.communication_text = ""
+        self.comm_clear_job = None
         
     def create_ui(self):
         """Create the user interface"""
@@ -424,8 +425,8 @@ class RemoteControlClient:
                                         image=photo, anchor=tk.CENTER)
                 self.canvas.image = photo  # Keep reference
                 
-                # Redraw communication overlay if active
-                if self.communication_mode:
+                # Redraw communication overlay if active or lingering text should show
+                if self.communication_mode or self.communication_text:
                     self.draw_communication_overlay()
                 
         except Exception as e:
@@ -436,12 +437,23 @@ class RemoteControlClient:
         self.communication_mode = enabled
         if enabled:
             logger.info("💬 Communication mode enabled - server is typing to you")
+            if self.comm_clear_job:
+                try:
+                    self.root.after_cancel(self.comm_clear_job)
+                except Exception:
+                    pass
+                self.comm_clear_job = None
             # Don't clear text - keep existing messages
             self.draw_communication_overlay()
         else:
             logger.info("💬 Communication mode disabled - messages will stay for 10 seconds")
             # Don't clear immediately - wait 10 seconds
-            self.root.after(10000, self.clear_communication_overlay)
+            if self.comm_clear_job:
+                try:
+                    self.root.after_cancel(self.comm_clear_job)
+                except Exception:
+                    pass
+            self.comm_clear_job = self.root.after(10000, self.clear_communication_overlay)
     
     def clear_communication_overlay(self):
         """Clear communication overlay after delay"""
@@ -454,6 +466,7 @@ class RemoteControlClient:
             if self.comm_text_id:
                 self.canvas.delete(self.comm_text_id)
                 self.comm_text_id = None
+            self.comm_clear_job = None
     
     def draw_communication_overlay(self):
         """Draw communication text overlay on canvas"""
@@ -511,8 +524,8 @@ class RemoteControlClient:
                 # Request frame (don't wait for display to complete)
                 await self.send_message({
                     'type': 'request_frame',
-                    'quality': 85,
-                    'scale': 1.0
+                    'quality': 80,
+                    'scale': 0.85
                 })
                 
                 # Wait for frame with longer timeout
@@ -541,6 +554,10 @@ class RemoteControlClient:
                     # Communication mode toggled on server
                     enabled = data.get('enabled', False)
                     self.root.after(0, self.toggle_communication_display, enabled)
+                elif msg_type == 'communication_text':
+                    text = data.get('text', '')
+                    if text:
+                        self.root.after(0, self.append_communication_text, text)
                 elif msg_type == 'server_disconnected':
                     logger.warning("Server disconnected")
                     self.root.after(0, lambda: messagebox.showwarning("Disconnected", "Server disconnected"))
