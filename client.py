@@ -16,6 +16,7 @@ from PIL import Image, ImageTk
 import logging
 import threading
 import pyperclip
+import time
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -55,7 +56,8 @@ class RemoteControlClient:
         # Communication mode
         self.communication_mode = False
         self.communication_text = ""
-        self.comm_clear_job = None
+        self.communication_history = []  # List of {'text': str, 'expires_at': float}
+        self.comm_cleanup_job = None
         
     def create_ui(self):
         """Create the user interface"""
@@ -437,39 +439,78 @@ class RemoteControlClient:
         self.communication_mode = enabled
         if enabled:
             logger.info("💬 Communication mode enabled - server is typing to you")
-            if self.comm_clear_job:
-                try:
-                    self.root.after_cancel(self.comm_clear_job)
-                except Exception:
-                    pass
-                self.comm_clear_job = None
-            # Don't clear text - keep existing messages
+            self.communication_text = ""
             self.draw_communication_overlay()
         else:
-            logger.info("💬 Communication mode disabled - messages will stay for 10 seconds")
-            # Don't clear immediately - wait 10 seconds
-            if self.comm_clear_job:
-                try:
-                    self.root.after_cancel(self.comm_clear_job)
-                except Exception:
-                    pass
-            self.comm_clear_job = self.root.after(10000, self.clear_communication_overlay)
+            logger.info("💬 Communication mode disabled - keeping messages for 10 seconds each")
+            self._finalize_active_message()
+            self.draw_communication_overlay()
     
-    def clear_communication_overlay(self):
-        """Clear communication overlay after delay"""
-        # Only clear if communication mode is still off
-        if not self.communication_mode:
+    def _finalize_active_message(self):
+        """Store the currently typed text into history with its own timer"""
+        if not self.communication_text.strip():
             self.communication_text = ""
+            return
+        entry = {
+            'text': self.communication_text,
+            'expires_at': time.time() + 10
+        }
+        self.communication_history.append(entry)
+        self.communication_text = ""
+        self._schedule_history_cleanup()
+
+    def _append_history_text(self, text):
+        """Append incoming characters to the latest history entry"""
+        if not self.communication_history:
+            self.communication_history.append({'text': '', 'expires_at': time.time() + 10})
+        entry = self.communication_history[-1]
+        entry['text'] = self._apply_text_edit(entry['text'], text)
+        entry['expires_at'] = time.time() + 10
+        if not entry['text'].strip():
+            self.communication_history.pop()
+        self._schedule_history_cleanup()
+
+    def _apply_text_edit(self, current_text, incoming):
+        if incoming == '\b':
+            return current_text[:-1]
+        if incoming == '\n':
+            return current_text + ' | '
+        return current_text + incoming
+
+    def _schedule_history_cleanup(self):
+        if self.comm_cleanup_job:
+            return
+        self.comm_cleanup_job = self.root.after(500, self._history_cleanup_tick)
+
+    def _history_cleanup_tick(self):
+        now = time.time()
+        before = len(self.communication_history)
+        self.communication_history = [entry for entry in self.communication_history
+                                      if entry['expires_at'] > now and entry['text'].strip()]
+        if self.communication_history:
+            self.comm_cleanup_job = self.root.after(500, self._history_cleanup_tick)
+        else:
+            self.comm_cleanup_job = None
+        if len(self.communication_history) != before:
+            self.draw_communication_overlay()
+    
+    def draw_communication_overlay(self):
+        """Draw communication text overlay on canvas"""
+        now = time.time()
+        # Remove expired history entries before drawing
+        self.communication_history = [entry for entry in self.communication_history
+                                      if entry['expires_at'] > now and entry['text'].strip()]
+        has_history = bool(self.communication_history)
+        active_text = self.communication_text.strip()
+        if not has_history and not self.communication_mode and not active_text:
             if self.comm_overlay:
                 self.canvas.delete(self.comm_overlay)
                 self.comm_overlay = None
             if self.comm_text_id:
                 self.canvas.delete(self.comm_text_id)
                 self.comm_text_id = None
-            self.comm_clear_job = None
-    
-    def draw_communication_overlay(self):
-        """Draw communication text overlay on canvas"""
+            return
+
         canvas_width = self.canvas.winfo_width()
         canvas_height = self.canvas.winfo_height()
         
@@ -479,39 +520,39 @@ class RemoteControlClient:
             self.canvas.delete(self.comm_text_id)
         
         # Draw semi-transparent background box
-        box_height = 100
+        box_height = 140
         self.comm_overlay = self.canvas.create_rectangle(
             0, canvas_height - box_height,
             canvas_width, canvas_height,
             fill='black', stipple='gray50', outline=''
         )
         
-        # Draw text
-        self.comm_text_id = self.canvas.create_text(
-            10, canvas_height - box_height + 10,
-            text=f"💬 Server says: {self.communication_text}",
-            anchor=tk.NW,
-            fill='white',
-            font=('Arial', 14, 'bold'),
-            width=canvas_width - 20
-        )
-    
-    def append_communication_text(self, text):
-        """Append text to communication display"""
-        # Allow text to be added even if mode is off (for the 10s grace period)
-        if text == '\b':  # Backspace
-            if self.communication_text:
-                self.communication_text = self.communication_text[:-1]
-        elif text == '\n':  # Enter
-            self.communication_text += ' | '
+                # Remove old overlay
+                if self.comm_overlay:
+                    self.canvas.delete(self.comm_overlay)
+                    self.canvas.delete(self.comm_text_id)
+        
+                # Build chat log text first to size the box
+                lines = []
+                for entry in self.communication_history:
+                    lines.append(f"💬 {entry['text']}")
+                if self.communication_mode:
+                    lines.append(f"✍️ {self.communication_text}" if self.communication_text else "✍️ …")
+                text_value = "\n".join(lines)
+                line_count = max(1, len(lines))
+                box_height = min(canvas_height, max(80, 24 * line_count + 20))
+        
+                # Draw semi-transparent background box sized to content
+                self.comm_overlay = self.canvas.create_rectangle(
+                    0, canvas_height - box_height,
+                    canvas_width, canvas_height,
+                    fill='black', stipple='gray50', outline=''
+                )
+            if len(self.communication_text) > 200:
+                self.communication_text = self.communication_text[-200:]
         else:
-            self.communication_text += text
+            self._append_history_text(text)
         
-        # Limit text length
-        if len(self.communication_text) > 200:
-            self.communication_text = self.communication_text[-200:]
-        
-        # Always redraw when text changes
         self.draw_communication_overlay()
     
     async def receive_frames(self):
@@ -659,6 +700,12 @@ class RemoteControlClient:
         """Handle window close"""
         self.running = False
         self.connected = False
+        if self.comm_cleanup_job:
+            try:
+                self.root.after_cancel(self.comm_cleanup_job)
+            except Exception:
+                pass
+            self.comm_cleanup_job = None
         if self.websocket:
             asyncio.run_coroutine_threadsafe(self.websocket.close(), self.loop)
         self.root.quit()
