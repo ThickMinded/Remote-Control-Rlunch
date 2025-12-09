@@ -356,12 +356,10 @@ class RemoteControlServer:
     
     def close_communication_window(self):
         """Close the communication window"""
-        if self.comm_window:
-            try:
-                # Just clear reference - the keep_focus loop will handle cleanup
-                self.comm_window = None
-            except:
-                pass
+        # Just set flag to False - the keep_focus loop will handle cleanup
+        # This prevents Tcl_AsyncDelete error from cross-thread operations
+        self.communication_mode = False
+        self.comm_window = None
     
     async def send_communication_notification(self, enabled):
         """Send communication mode status to client"""

@@ -485,11 +485,7 @@ class RemoteControlClient:
     
     def append_communication_text(self, text):
         """Append text to communication display"""
-        # Only append if we're actually in communication mode
-        if not self.communication_mode:
-            logger.debug("Ignoring text - communication mode not active")
-            return
-            
+        # Allow text to be added even if mode is off (for the 10s grace period)
         if text == '\b':  # Backspace
             if self.communication_text:
                 self.communication_text = self.communication_text[:-1]
@@ -525,8 +521,8 @@ class RemoteControlClient:
                 msg_type = data.get('type')
                 
                 if msg_type == 'screen':
-                    # Check for communication text in frame (only if mode is active)
-                    if self.communication_mode and 'communication_text' in data:
+                    # Check for communication text in frame
+                    if 'communication_text' in data:
                         comm_text = data.get('communication_text', '')
                         if comm_text:
                             self.root.after(0, self.append_communication_text, comm_text)
