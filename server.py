@@ -17,6 +17,7 @@ from PIL import Image
 import logging
 import sys
 import pyperclip
+from pynput import keyboard
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -36,6 +37,12 @@ class RemoteControlServer:
         # Store last client cursor position without moving actual cursor
         self.client_cursor_x = 0
         self.client_cursor_y = 0
+        
+        # Communication mode state
+        self.communication_mode = False
+        self.communication_buffer = ""
+        self.keyboard_listener = None
+        self.current_client_id = None
         
     async def capture_screen(self, quality=95, scale=1.0):
         """Capture screen and return as base64 encoded JPEG"""
@@ -163,6 +170,84 @@ class RemoteControlServer:
         except Exception as e:
             logger.error(f"Keyboard event error: {e}")
     
+    def start_keyboard_listener(self):
+        """Start listening to server keyboard for communication mode"""
+        shift_pressed = False
+        
+        def on_press(key):
+            nonlocal shift_pressed
+            
+            # Track shift key
+            if key in [keyboard.Key.shift, keyboard.Key.shift_r]:
+                shift_pressed = True
+            
+            # Check for CapsLock while shift is pressed
+            if key == keyboard.Key.caps_lock and shift_pressed:
+                # Toggle communication mode
+                self.toggle_communication_mode(not self.communication_mode)
+                return
+            
+            # If in communication mode, capture text
+            if self.communication_mode:
+                try:
+                    if hasattr(key, 'char') and key.char:
+                        # Regular character
+                        self.send_communication_text(key.char)
+                    elif key == keyboard.Key.space:
+                        self.send_communication_text(' ')
+                    elif key == keyboard.Key.backspace:
+                        self.send_communication_text('\b')  # Backspace signal
+                    elif key == keyboard.Key.enter:
+                        self.send_communication_text('\n')
+                except Exception as e:
+                    logger.error(f"Communication text error: {e}")
+        
+        def on_release(key):
+            nonlocal shift_pressed
+            
+            # Track shift key release
+            if key in [keyboard.Key.shift, keyboard.Key.shift_r]:
+                shift_pressed = False
+        
+        self.keyboard_listener = keyboard.Listener(on_press=on_press, on_release=on_release)
+        self.keyboard_listener.start()
+        logger.info("⌨️ Keyboard listener started for communication mode")
+        logger.info("⌨️ Keyboard listener started for communication mode")
+    
+    def toggle_communication_mode(self, enabled):
+        """Toggle communication mode on/off"""
+        self.communication_mode = enabled
+        if enabled:
+            logger.info("🗨️ Communication mode ENABLED - typing will be sent to client")
+            self.communication_buffer = ""
+            # Send notification to client
+            asyncio.create_task(self.send_communication_notification(True))
+        else:
+            logger.info("🚫 Communication mode DISABLED - normal typing restored")
+            # Send notification to client
+            asyncio.create_task(self.send_communication_notification(False))
+            self.communication_buffer = ""
+    
+    def send_communication_text(self, text):
+        """Send communication text to client"""
+        if self.websocket and self.current_client_id:
+            message = {
+                'type': 'communication_text',
+                'text': text,
+                'target_client': self.current_client_id
+            }
+            asyncio.create_task(self.websocket.send(json.dumps(message)))
+    
+    async def send_communication_notification(self, enabled):
+        """Send communication mode status to client"""
+        if self.websocket and self.current_client_id:
+            message = {
+                'type': 'communication_mode',
+                'enabled': enabled,
+                'target_client': self.current_client_id
+            }
+            await self.websocket.send(json.dumps(message))
+    
     async def handle_relay_messages(self):
         """Handle messages from relay (forwarded from clients)"""
         try:
@@ -175,7 +260,14 @@ class RemoteControlServer:
                     if msg_type == 'registered':
                         logger.info(f"✅ Successfully registered with relay as '{self.server_id}'")
                         self.connected = True
+                        # Start keyboard listener for communication mode
+                        if not self.keyboard_listener:
+                            self.start_keyboard_listener()
                         continue
+                    
+                    # Store current client ID for communication
+                    if client_id:
+                        self.current_client_id = client_id
                     
                     if msg_type == 'mouse':
                         await self.handle_mouse_event(data)

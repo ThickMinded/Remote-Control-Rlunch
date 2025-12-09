@@ -3,3 +3,4 @@ pyautogui==0.9.54
 Pillow==10.1.0
 mss==9.0.1
 pyperclip==1.8.2
+pynput==1.7.6

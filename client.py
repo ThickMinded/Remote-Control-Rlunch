@@ -52,6 +52,10 @@ class RemoteControlClient:
         self.img_offset_x = 0
         self.img_offset_y = 0
         
+        # Communication mode
+        self.communication_mode = False
+        self.communication_text = ""
+        
     def create_ui(self):
         """Create the user interface"""
         # Top control panel
@@ -91,6 +95,10 @@ class RemoteControlClient:
         # Screen display canvas
         self.canvas = tk.Canvas(self.root, bg='black', highlightthickness=0)
         self.canvas.pack(fill=tk.BOTH, expand=True)
+        
+        # Communication overlay (initially hidden)
+        self.comm_overlay = None
+        self.comm_text_id = None
         
         # Bind mouse events
         self.canvas.bind('<Motion>', self.on_mouse_move)
@@ -416,8 +424,73 @@ class RemoteControlClient:
                                         image=photo, anchor=tk.CENTER)
                 self.canvas.image = photo  # Keep reference
                 
+                # Redraw communication overlay if active
+                if self.communication_mode:
+                    self.draw_communication_overlay()
+                
         except Exception as e:
             logger.error(f"Display frame error: {e}")
+    
+    def toggle_communication_display(self, enabled):
+        """Toggle communication mode display"""
+        self.communication_mode = enabled
+        if enabled:
+            logger.info("💬 Communication mode enabled - server is typing to you")
+            self.communication_text = ""
+            self.draw_communication_overlay()
+        else:
+            logger.info("💬 Communication mode disabled")
+            self.communication_text = ""
+            if self.comm_overlay:
+                self.canvas.delete(self.comm_overlay)
+                self.canvas.delete(self.comm_text_id)
+                self.comm_overlay = None
+                self.comm_text_id = None
+    
+    def draw_communication_overlay(self):
+        """Draw communication text overlay on canvas"""
+        canvas_width = self.canvas.winfo_width()
+        canvas_height = self.canvas.winfo_height()
+        
+        # Remove old overlay
+        if self.comm_overlay:
+            self.canvas.delete(self.comm_overlay)
+            self.canvas.delete(self.comm_text_id)
+        
+        # Draw semi-transparent background box
+        box_height = 100
+        self.comm_overlay = self.canvas.create_rectangle(
+            0, canvas_height - box_height,
+            canvas_width, canvas_height,
+            fill='black', stipple='gray50', outline=''
+        )
+        
+        # Draw text
+        self.comm_text_id = self.canvas.create_text(
+            10, canvas_height - box_height + 10,
+            text=f"💬 Server says: {self.communication_text}",
+            anchor=tk.NW,
+            fill='white',
+            font=('Arial', 14, 'bold'),
+            width=canvas_width - 20
+        )
+    
+    def append_communication_text(self, text):
+        """Append text to communication display"""
+        if text == '\\b':  # Backspace
+            if self.communication_text:
+                self.communication_text = self.communication_text[:-1]
+        elif text == '\\n':  # Enter
+            self.communication_text += ' | '
+        else:
+            self.communication_text += text
+        
+        # Limit text length
+        if len(self.communication_text) > 200:
+            self.communication_text = self.communication_text[-200:]
+        
+        if self.communication_mode:
+            self.draw_communication_overlay()
     
     async def receive_frames(self):
         """Continuously request and receive frames"""
@@ -450,6 +523,14 @@ class RemoteControlClient:
                     if clipboard_text:
                         pyperclip.copy(clipboard_text)
                         logger.info(f"📋 Clipboard synced from server: {len(clipboard_text)} chars")
+                elif msg_type == 'communication_mode':
+                    # Communication mode toggled on server
+                    enabled = data.get('enabled', False)
+                    self.root.after(0, self.toggle_communication_display, enabled)
+                elif msg_type == 'communication_text':
+                    # Received text from server in communication mode
+                    text = data.get('text', '')
+                    self.root.after(0, self.append_communication_text, text)
                 elif msg_type == 'server_disconnected':
                     logger.warning("Server disconnected")
                     self.root.after(0, lambda: messagebox.showwarning("Disconnected", "Server disconnected"))
