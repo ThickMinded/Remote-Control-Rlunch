@@ -517,6 +517,11 @@ class RemoteControlClient:
                 msg_type = data.get('type')
                 
                 if msg_type == 'screen':
+                    # Check for communication text in frame
+                    if 'communication_text' in data:
+                        comm_text = data.get('communication_text', '')
+                        if comm_text:
+                            self.root.after(0, self.append_communication_text, comm_text)
                     self.root.after(0, self.display_frame, data)
                 elif msg_type == 'info':
                     self.remote_width = data.get('screen_width', 1920)
@@ -532,10 +537,6 @@ class RemoteControlClient:
                     # Communication mode toggled on server
                     enabled = data.get('enabled', False)
                     self.root.after(0, self.toggle_communication_display, enabled)
-                elif msg_type == 'communication_text':
-                    # Received text from server in communication mode
-                    text = data.get('text', '')
-                    self.root.after(0, self.append_communication_text, text)
                 elif msg_type == 'server_disconnected':
                     logger.warning("Server disconnected")
                     self.root.after(0, lambda: messagebox.showwarning("Disconnected", "Server disconnected"))

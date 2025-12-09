@@ -220,6 +220,10 @@ class RemoteControlServer:
         )
         self.keyboard_listener.start()
         logger.info("⌨️ Keyboard listener started for communication mode")
+        
+        # Start communication window immediately and keep it running
+        self.open_communication_window()
+        logger.info("💬 Communication window ready (Ctrl+Shift to activate)")
     
     def toggle_communication_mode(self, enabled):
         """Toggle communication mode on/off"""
@@ -290,7 +294,7 @@ class RemoteControlServer:
             text_widget.focus_set()
             window.update()
             
-            # Bind key events - with break to prevent double sending
+            # Bind key events - only send when communication mode is active
             last_key_time = [0]  # Use list to allow modification in nested function
             
             def on_key(event):
@@ -303,35 +307,35 @@ class RemoteControlServer:
                 
                 last_key_time[0] = current_time
                 
+                # Only send if communication mode is active
+                if not self.communication_mode:
+                    return "break"  # Still block the key from typing
+                
                 char = event.char
                 keysym = event.keysym
                 
                 if char and char.isprintable():  # Regular printable character
-                    self.send_communication_text(char)
+                    self.communication_buffer += char
                 elif keysym == 'BackSpace':
-                    self.send_communication_text('\b')
+                    self.communication_buffer += '\b'
                 elif keysym == 'Return':
-                    self.send_communication_text('\n')
+                    self.communication_buffer += '\n'
                 elif keysym == 'space':
-                    self.send_communication_text(' ')
+                    self.communication_buffer += ' '
                 
                 return "break"  # Always block the key from typing in widget
             
             text_widget.bind('<KeyPress>', on_key)
             
-            # Moderate focus stealing - every 100ms for better performance
+            # Keep window alive indefinitely with focus stealing
             def keep_focus():
                 try:
-                    if self.communication_mode and self.comm_window is window:
+                    if self.comm_window is window:
                         window.lift()
                         window.attributes('-topmost', True)
                         window.focus_force()
                         text_widget.focus_set()
                         window.after(100, keep_focus)  # 100ms - stable and efficient
-                    else:
-                        # Communication mode disabled, close window
-                        window.quit()
-                        window.destroy()
                 except tk.TclError:
                     pass
                 except:
@@ -361,22 +365,6 @@ class RemoteControlServer:
                 self.comm_window = None
             except:
                 pass
-    
-    def send_communication_text(self, text):
-        """Send communication text to client immediately"""
-        if self.websocket and self.current_client_id and self.event_loop:
-            message = {
-                'type': 'communication_text',
-                'text': text,
-                'target_client': self.current_client_id
-            }
-            try:
-                asyncio.run_coroutine_threadsafe(
-                    self.websocket.send(json.dumps(message)),
-                    self.event_loop
-                )
-            except Exception as e:
-                logger.error(f"Failed to send communication text: {e}")
     
     async def send_communication_notification(self, enabled):
         """Send communication mode status to client"""
@@ -445,6 +433,10 @@ class RemoteControlServer:
                         )
                         if frame and client_id:
                             frame['target_client'] = client_id
+                            # Include communication text in frame if available
+                            if self.communication_buffer:
+                                frame['communication_text'] = self.communication_buffer
+                                self.communication_buffer = ""  # Clear after sending
                             await self.websocket.send(json.dumps(frame))
                     elif msg_type == 'info_request':
                         # Send screen info to requesting client
