@@ -15,6 +15,7 @@ from tkinter import messagebox, simpledialog
 from PIL import Image, ImageTk
 import logging
 import threading
+import pyperclip
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -83,6 +84,12 @@ class RemoteControlClient:
                                 textvariable=self.fps_var, command=self.update_fps)
         fps_spinbox.pack(side=tk.LEFT, padx=5)
         
+        # Clipboard controls
+        tk.Button(control_frame, text="📋 Send", command=self.send_clipboard,
+                 bg='#2196F3', fg='white', padx=5).pack(side=tk.LEFT, padx=2)
+        tk.Button(control_frame, text="📋 Get", command=self.get_clipboard,
+                 bg='#2196F3', fg='white', padx=5).pack(side=tk.LEFT, padx=2)
+        
         # Screen display canvas
         self.canvas = tk.Canvas(self.root, bg='black', highlightthickness=0)
         self.canvas.pack(fill=tk.BOTH, expand=True)
@@ -112,6 +119,42 @@ class RemoteControlClient:
             logger.info(f"FPS updated to {self.fps}")
         except ValueError:
             pass
+    
+    def send_clipboard(self):
+        """Send local clipboard content to server"""
+        if not self.connected:
+            messagebox.showwarning("Not Connected", "Please connect to server first")
+            return
+        
+        try:
+            clipboard_text = pyperclip.paste()
+            if clipboard_text:
+                message = {
+                    'type': 'clipboard_sync',
+                    'text': clipboard_text
+                }
+                asyncio.run_coroutine_threadsafe(self.send_message(message), self.loop)
+                logger.info(f"📋 Sent clipboard to server: {len(clipboard_text)} chars")
+                messagebox.showinfo("Clipboard", f"Sent {len(clipboard_text)} characters to server")
+            else:
+                messagebox.showinfo("Clipboard", "Clipboard is empty")
+        except Exception as e:
+            logger.error(f"Clipboard send error: {e}")
+            messagebox.showerror("Error", f"Failed to send clipboard: {e}")
+    
+    def get_clipboard(self):
+        """Request clipboard content from server"""
+        if not self.connected:
+            messagebox.showwarning("Not Connected", "Please connect to server first")
+            return
+        
+        try:
+            message = {'type': 'clipboard_request'}
+            asyncio.run_coroutine_threadsafe(self.send_message(message), self.loop)
+            logger.info("📋 Requested clipboard from server")
+        except Exception as e:
+            logger.error(f"Clipboard request error: {e}")
+            messagebox.showerror("Error", f"Failed to request clipboard: {e}")
     
     def get_normalized_coords(self, event):
         """Convert canvas coordinates to normalized coordinates (0-1 range)"""
@@ -314,6 +357,13 @@ class RemoteControlClient:
                     self.remote_width = data.get('screen_width', 1920)
                     self.remote_height = data.get('screen_height', 1080)
                     logger.info(f"Remote screen: {self.remote_width}x{self.remote_height}")
+                elif msg_type == 'clipboard_data':
+                    # Received clipboard content from server
+                    clipboard_text = data.get('text', '')
+                    if clipboard_text:
+                        pyperclip.copy(clipboard_text)
+                        logger.info(f"📋 Received clipboard from server: {len(clipboard_text)} chars")
+                        self.root.after(0, lambda: messagebox.showinfo("Clipboard", f"Received {len(clipboard_text)} characters from server"))
                 elif msg_type == 'server_disconnected':
                     logger.warning("Server disconnected")
                     self.root.after(0, lambda: messagebox.showwarning("Disconnected", "Server disconnected"))

@@ -16,6 +16,7 @@ import mss
 from PIL import Image
 import logging
 import sys
+import pyperclip
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -170,6 +171,25 @@ class RemoteControlServer:
                         await self.handle_mouse_event(data)
                     elif msg_type == 'keyboard':
                         self.handle_keyboard_event(data)
+                    elif msg_type == 'clipboard_sync':
+                        # Receive clipboard content from client
+                        clipboard_text = data.get('text', '')
+                        if clipboard_text:
+                            pyperclip.copy(clipboard_text)
+                            logger.info(f"📋 Clipboard synced from client: {len(clipboard_text)} chars")
+                    elif msg_type == 'clipboard_request':
+                        # Send clipboard content to client
+                        try:
+                            clipboard_text = pyperclip.paste()
+                            clipboard_msg = {
+                                'type': 'clipboard_data',
+                                'text': clipboard_text,
+                                'target_client': client_id
+                            }
+                            await self.websocket.send(json.dumps(clipboard_msg))
+                            logger.info(f"📋 Sent clipboard to client: {len(clipboard_text)} chars")
+                        except Exception as e:
+                            logger.error(f"Clipboard read error: {e}")
                     elif msg_type == 'request_frame':
                         # Send screen capture back through relay
                         frame = await self.capture_screen(

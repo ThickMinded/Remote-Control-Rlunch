@@ -1,12 +1,18 @@
 @echo off
-echo Starting Remote Control Server (Host Computer)...
+echo ======================================================================
+echo Remote Control Server - Heroku Mode
+echo ======================================================================
 echo.
-echo This computer will be controlled remotely via Replit relay
+echo Checking requirements...
+python -m pip install -q websockets==12.0 pyautogui pillow mss pyperclip 2>nul
+echo.
+echo This computer will be controlled remotely via Heroku relay
+echo Automatically connecting to: wss://obscure-crag-09189-c525dbc46d88.herokuapp.com
+echo.
 echo Keep this window open while being controlled
 echo Press Ctrl+C to stop the server
 echo.
-echo Enter your Replit relay URL (e.g., ws://your-repl.repl.co:8765)
-echo Or press Enter to test locally (ws://localhost:8765)
+echo ======================================================================
 echo.
 python server.py
 pause
