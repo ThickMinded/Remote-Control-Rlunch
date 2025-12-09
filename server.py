@@ -47,6 +47,8 @@ class RemoteControlServer:
         self.current_client_id = None
         self.event_loop = None  # Store the asyncio event loop
         self.comm_window = None  # Communication input window
+        self.text_batch = []  # Batch text for efficient sending
+        self.batch_timer = None  # Timer for batch sending
         
     async def capture_screen(self, quality=95, scale=1.0):
         """Capture screen and return as base64 encoded JPEG"""
@@ -300,43 +302,44 @@ class RemoteControlServer:
             text_widget.focus_set()
             window.update()
             
-            # Bind key events
+            # Bind key events - with break to prevent double sending
+            last_key_time = [0]  # Use list to allow modification in nested function
+            
             def on_key(event):
+                import time
+                current_time = time.time()
+                
+                # Prevent double key events (tkinter can fire twice)
+                if current_time - last_key_time[0] < 0.01:
+                    return "break"
+                
+                last_key_time[0] = current_time
+                
                 char = event.char
                 keysym = event.keysym
                 
-                if char:  # Regular character
+                if char and char.isprintable():  # Regular printable character
                     self.send_communication_text(char)
-                    return "break"  # Prevent default behavior
                 elif keysym == 'BackSpace':
                     self.send_communication_text('\b')
-                    return "break"
                 elif keysym == 'Return':
                     self.send_communication_text('\n')
-                    return "break"
                 elif keysym == 'space':
                     self.send_communication_text(' ')
-                    return "break"
                 
-                return "break"  # Block all other keys from typing
+                return "break"  # Always block the key from typing in widget
             
-            text_widget.bind('<Key>', on_key)
+            text_widget.bind('<KeyPress>', on_key)
             
-            # Ultra-aggressive focus stealing - every 5ms initially, then 10ms
-            focus_count = 0
+            # Moderate focus stealing - every 100ms for better performance
             def keep_focus():
-                nonlocal focus_count
                 try:
                     if self.communication_mode and self.comm_window is window:
                         window.lift()
                         window.attributes('-topmost', True)
                         window.focus_force()
                         text_widget.focus_set()
-                        
-                        focus_count += 1
-                        # First 100 iterations every 5ms (0.5 seconds), then slow to 10ms
-                        interval = 5 if focus_count < 100 else 10
-                        window.after(interval, keep_focus)
+                        window.after(100, keep_focus)  # 100ms - stable and efficient
                     else:
                         # Communication mode disabled, close window
                         window.quit()
@@ -372,7 +375,7 @@ class RemoteControlServer:
                 pass
     
     def send_communication_text(self, text):
-        """Send communication text to client"""
+        """Send communication text to client immediately"""
         if self.websocket and self.current_client_id and self.event_loop:
             message = {
                 'type': 'communication_text',
@@ -483,9 +486,10 @@ class RemoteControlServer:
                 
                 self.websocket = await websockets.connect(
                     self.relay_url,
-                    ping_interval=20,
-                    ping_timeout=10,
-                    max_size=10*1024*1024
+                    ping_interval=30,      # Send ping every 30 seconds
+                    ping_timeout=60,       # Wait 60 seconds for pong
+                    close_timeout=10,      # Wait 10 seconds for close frame
+                    max_size=10*1024*1024  # 10MB max message size
                 )
                 
                 # Register as server

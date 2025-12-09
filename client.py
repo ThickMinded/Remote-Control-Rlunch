@@ -556,7 +556,12 @@ class RemoteControlClient:
         """Connect to relay server and request specific server"""
         try:
             logger.info(f"Connecting to relay: {relay_url}")
-            self.websocket = await websockets.connect(relay_url, ping_interval=20, ping_timeout=10)
+            self.websocket = await websockets.connect(
+                relay_url, 
+                ping_interval=30,  # Send ping every 30 seconds
+                ping_timeout=60,   # Wait 60 seconds for pong
+                close_timeout=10   # Wait 10 seconds for close frame
+            )
             
             # Register as client and request server
             register_msg = {
