@@ -477,10 +477,10 @@ class RemoteControlClient:
     
     def append_communication_text(self, text):
         """Append text to communication display"""
-        if text == '\\b':  # Backspace
+        if text == '\b':  # Backspace
             if self.communication_text:
                 self.communication_text = self.communication_text[:-1]
-        elif text == '\\n':  # Enter
+        elif text == '\n':  # Enter
             self.communication_text += ' | '
         else:
             self.communication_text += text
@@ -506,8 +506,8 @@ class RemoteControlClient:
                     'scale': 1.0
                 })
                 
-                # Wait for frame
-                message = await asyncio.wait_for(self.websocket.recv(), timeout=5.0)
+                # Wait for frame with longer timeout
+                message = await asyncio.wait_for(self.websocket.recv(), timeout=10.0)
                 data = json.loads(message)
                 msg_type = data.get('type')
                 
@@ -547,7 +547,15 @@ class RemoteControlClient:
                 await asyncio.sleep(self.frame_interval)
                 
             except asyncio.TimeoutError:
-                logger.warning("Frame timeout")
+                logger.debug("Frame timeout - continuing...")
+                continue
+            except websockets.exceptions.ConnectionClosed:
+                logger.warning("⚠️ Connection closed")
+                self.connected = False
+                break
+            except json.JSONDecodeError as e:
+                logger.error(f"Invalid JSON received: {e}")
+                continue
             except Exception as e:
                 logger.error(f"Receive frame error: {e}")
                 break
@@ -656,7 +664,21 @@ def main():
     print("=" * 70)
     
     client = RemoteControlClient()
-    client.start()
+    try:
+        client.start()
+    except KeyboardInterrupt:
+        print("\n🛑 Client stopped by user")
+    except Exception as e:
+        logger.error(f"Client error: {e}")
+    finally:
+        # Cleanup
+        client.running = False
+        if client.websocket:
+            try:
+                asyncio.run(client.websocket.close())
+            except:
+                pass
+        logger.info("✅ Client cleanup complete")
 
 if __name__ == "__main__":
     main()

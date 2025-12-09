@@ -47,8 +47,6 @@ class RemoteControlServer:
         self.current_client_id = None
         self.event_loop = None  # Store the asyncio event loop
         self.comm_window = None  # Communication input window
-        self.text_batch = []  # Batch text for efficient sending
-        self.batch_timer = None  # Timer for batch sending
         
     async def capture_screen(self, quality=95, scale=1.0):
         """Capture screen and return as base64 encoded JPEG"""
@@ -198,21 +196,8 @@ class RemoteControlServer:
                 logger.info(f"🔄 Toggling communication mode from {self.communication_mode} to {not self.communication_mode}")
                 self.toggle_communication_mode(not self.communication_mode)
             
-            # If in communication mode, capture and send text
-            if self.communication_mode:
-                # Capture text keys and send to client
-                try:
-                    if hasattr(key, 'char') and key.char:
-                        # Regular character
-                        self.send_communication_text(key.char)
-                    elif key == keyboard.Key.space:
-                        self.send_communication_text(' ')
-                    elif key == keyboard.Key.backspace:
-                        self.send_communication_text('\b')
-                    elif key == keyboard.Key.enter:
-                        self.send_communication_text('\n')
-                except Exception as e:
-                    logger.error(f"Communication text error: {e}")
+            # Don't capture text here - the tkinter window handles it
+            # This prevents double sending
         
         def on_release(key):
             nonlocal shift_pressed, ctrl_pressed, both_pressed
@@ -369,7 +354,7 @@ class RemoteControlServer:
         """Close the communication window"""
         if self.comm_window:
             try:
-                # Just set flag - the keep_focus loop will handle cleanup
+                # Just clear reference - the keep_focus loop will handle cleanup
                 self.comm_window = None
             except:
                 pass
@@ -382,20 +367,26 @@ class RemoteControlServer:
                 'text': text,
                 'target_client': self.current_client_id
             }
-            asyncio.run_coroutine_threadsafe(
-                self.websocket.send(json.dumps(message)),
-                self.event_loop
-            )
+            try:
+                asyncio.run_coroutine_threadsafe(
+                    self.websocket.send(json.dumps(message)),
+                    self.event_loop
+                )
+            except Exception as e:
+                logger.error(f"Failed to send communication text: {e}")
     
     async def send_communication_notification(self, enabled):
         """Send communication mode status to client"""
         if self.websocket and self.current_client_id:
-            message = {
-                'type': 'communication_mode',
-                'enabled': enabled,
-                'target_client': self.current_client_id
-            }
-            await self.websocket.send(json.dumps(message))
+            try:
+                message = {
+                    'type': 'communication_mode',
+                    'enabled': enabled,
+                    'target_client': self.current_client_id
+                }
+                await self.websocket.send(json.dumps(message))
+            except Exception as e:
+                logger.error(f"Failed to send communication notification: {e}")
     
     async def handle_relay_messages(self):
         """Handle messages from relay (forwarded from clients)"""
@@ -562,6 +553,16 @@ def main():
         print("\n🛑 Server stopped by user")
     except Exception as e:
         logger.error(f"Server error: {e}")
+    finally:
+        # Cleanup resources
+        if server.comm_window:
+            server.close_communication_window()
+        if server.keyboard_listener:
+            try:
+                server.keyboard_listener.stop()
+            except:
+                pass
+        logger.info("✅ Server cleanup complete")
         raise
 
 if __name__ == "__main__":
