@@ -308,17 +308,29 @@ class RemoteControlClient:
             
             # Check for Ctrl+C (copy) - sync local clipboard to server
             if event.state & 0x4 and key.lower() == 'c':  # 0x4 is Ctrl modifier
-                # Give time for system to update clipboard
+                # Give time for system to update clipboard, then sync
                 self.root.after(50, self.auto_send_clipboard)
                 logger.info("📋 Ctrl+C detected - will sync clipboard to server")
             
-            # Check for Ctrl+V (paste) - get server clipboard first
+            # Check for Ctrl+V (paste) - get server clipboard first then paste
             elif event.state & 0x4 and key.lower() == 'v':  # 0x4 is Ctrl modifier
-                # Request clipboard from server before paste happens
+                # Request clipboard from server and send paste after a delay
                 self.auto_get_clipboard()
-                logger.info("📋 Ctrl+V detected - syncing clipboard from server")
-                return  # Don't send the key yet, wait for clipboard sync
+                # Send the paste command after clipboard sync (small delay)
+                self.root.after(100, lambda: self.send_key_command(key))
+                logger.info("📋 Ctrl+V detected - syncing clipboard from server then pasting")
+                return  # Don't send immediately, will send after delay
             
+            message = {
+                'type': 'keyboard',
+                'event': 'press',
+                'key': key
+            }
+            asyncio.run_coroutine_threadsafe(self.send_message(message), self.loop)
+    
+    def send_key_command(self, key):
+        """Send a key command to the server"""
+        if self.connected:
             message = {
                 'type': 'keyboard',
                 'event': 'press',
