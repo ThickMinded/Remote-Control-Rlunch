@@ -519,35 +519,37 @@ class RemoteControlClient:
             self.canvas.delete(self.comm_overlay)
             self.canvas.delete(self.comm_text_id)
         
-        # Draw semi-transparent background box
-        box_height = 140
+        # Build chat log text first to size the box
+        lines = []
+        for entry in self.communication_history:
+            lines.append(f"💬 {entry['text']}")
+        if self.communication_mode:
+            lines.append(f"✍️ {self.communication_text}" if self.communication_text else "✍️ …")
+        text_value = "\n".join(lines)
+        line_count = max(1, len(lines))
+        box_height = min(canvas_height, max(80, 24 * line_count + 20))
+        
+        # Draw semi-transparent background box sized to content
         self.comm_overlay = self.canvas.create_rectangle(
             0, canvas_height - box_height,
             canvas_width, canvas_height,
             fill='black', stipple='gray50', outline=''
         )
         
-                # Remove old overlay
-                if self.comm_overlay:
-                    self.canvas.delete(self.comm_overlay)
-                    self.canvas.delete(self.comm_text_id)
-        
-                # Build chat log text first to size the box
-                lines = []
-                for entry in self.communication_history:
-                    lines.append(f"💬 {entry['text']}")
-                if self.communication_mode:
-                    lines.append(f"✍️ {self.communication_text}" if self.communication_text else "✍️ …")
-                text_value = "\n".join(lines)
-                line_count = max(1, len(lines))
-                box_height = min(canvas_height, max(80, 24 * line_count + 20))
-        
-                # Draw semi-transparent background box sized to content
-                self.comm_overlay = self.canvas.create_rectangle(
-                    0, canvas_height - box_height,
-                    canvas_width, canvas_height,
-                    fill='black', stipple='gray50', outline=''
-                )
+        # Draw text
+        self.comm_text_id = self.canvas.create_text(
+            10, canvas_height - box_height + 10,
+            text=text_value,
+            anchor=tk.NW,
+            fill='white',
+            font=('Arial', 14, 'bold'),
+            width=canvas_width - 20
+        )
+    
+    def append_communication_text(self, text):
+        """Append text to communication display"""
+        if self.communication_mode:
+            self.communication_text = self._apply_text_edit(self.communication_text, text)
             if len(self.communication_text) > 200:
                 self.communication_text = self.communication_text[-200:]
         else:
