@@ -60,7 +60,7 @@ class RemoteControlServer:
                 
                 # Scale down for better performance
                 new_size = (int(img.width * scale), int(img.height * scale))
-                img = img.resize(new_size, Image.Resampling.LANCZOS)
+                img = img.resize(new_size, Image.Resampling.BILINEAR)
                 
                 # Compress as JPEG
                 buffer = io.BytesIO()
@@ -103,31 +103,28 @@ class RemoteControlServer:
                 original_pos = pyautogui.position()
                 button = data.get('button', 'left')
                 pyautogui.moveTo(x, y, duration=0)  # Move first
-                await asyncio.sleep(0.01)  # Small delay to ensure movement completes
                 pyautogui.click(button=button)  # Click at current position
-                await asyncio.sleep(0.01)  # Small delay to ensure click registers
                 pyautogui.moveTo(original_pos[0], original_pos[1], duration=0)  # Return
                 
             elif event_type == 'double_click':
                 original_pos = pyautogui.position()
                 pyautogui.moveTo(x, y, duration=0)
-                await asyncio.sleep(0.01)
                 pyautogui.doubleClick()
-                await asyncio.sleep(0.01)
                 pyautogui.moveTo(original_pos[0], original_pos[1], duration=0)
                 
             elif event_type == 'down':
                 original_pos = pyautogui.position()
                 button = data.get('button', 'left')
                 pyautogui.moveTo(x, y, duration=0)
-                await asyncio.sleep(0.01)
                 pyautogui.mouseDown(button=button)
-                await asyncio.sleep(0.01)
                 pyautogui.moveTo(original_pos[0], original_pos[1], duration=0)
                 
             elif event_type == 'up':
                 original_pos = pyautogui.position()
                 button = data.get('button', 'left')
+                pyautogui.moveTo(x, y, duration=0)
+                pyautogui.mouseUp(button=button)
+                pyautogui.moveTo(original_pos[0], original_pos[1], duration=0)
                 pyautogui.moveTo(x, y, duration=0)
                 await asyncio.sleep(0.01)
                 pyautogui.mouseUp(button=button)

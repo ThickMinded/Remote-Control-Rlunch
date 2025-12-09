@@ -441,10 +441,12 @@ class RemoteControlClient:
         else:
             logger.info("💬 Communication mode disabled")
             self.communication_text = ""
+            # Immediately clear overlay
             if self.comm_overlay:
                 self.canvas.delete(self.comm_overlay)
-                self.canvas.delete(self.comm_text_id)
                 self.comm_overlay = None
+            if self.comm_text_id:
+                self.canvas.delete(self.comm_text_id)
                 self.comm_text_id = None
     
     def draw_communication_overlay(self):
@@ -504,11 +506,11 @@ class RemoteControlClient:
         
         while self.connected:
             try:
-                # Request frame
+                # Request frame (don't wait for display to complete)
                 await self.send_message({
                     'type': 'request_frame',
-                    'quality': 95,
-                    'scale': 1.0
+                    'quality': 75,
+                    'scale': 0.8
                 })
                 
                 # Wait for frame with longer timeout
@@ -517,8 +519,8 @@ class RemoteControlClient:
                 msg_type = data.get('type')
                 
                 if msg_type == 'screen':
-                    # Check for communication text in frame
-                    if 'communication_text' in data:
+                    # Check for communication text in frame (only if mode is active)
+                    if self.communication_mode and 'communication_text' in data:
                         comm_text = data.get('communication_text', '')
                         if comm_text:
                             self.root.after(0, self.append_communication_text, comm_text)
@@ -548,9 +550,6 @@ class RemoteControlClient:
                     self.root.after(0, lambda: messagebox.showerror("Error", error_msg))
                     self.connected = False
                     break
-                
-                # Control frame rate
-                await asyncio.sleep(self.frame_interval)
                 
             except asyncio.TimeoutError:
                 logger.debug("Frame timeout - continuing...")
