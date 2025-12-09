@@ -84,11 +84,9 @@ class RemoteControlClient:
                                 textvariable=self.fps_var, command=self.update_fps)
         fps_spinbox.pack(side=tk.LEFT, padx=5)
         
-        # Clipboard controls
-        tk.Button(control_frame, text="📋 Send", command=self.send_clipboard,
-                 bg='#2196F3', fg='white', padx=5).pack(side=tk.LEFT, padx=2)
-        tk.Button(control_frame, text="📋 Get", command=self.get_clipboard,
-                 bg='#2196F3', fg='white', padx=5).pack(side=tk.LEFT, padx=2)
+        # Clipboard status indicator
+        tk.Label(control_frame, text="📋 Auto-sync", bg='#2b2b2b', fg='#4CAF50', 
+                font=('Arial', 9)).pack(side=tk.LEFT, padx=10)
         
         # Screen display canvas
         self.canvas = tk.Canvas(self.root, bg='black', highlightthickness=0)
@@ -142,6 +140,23 @@ class RemoteControlClient:
             logger.error(f"Clipboard send error: {e}")
             messagebox.showerror("Error", f"Failed to send clipboard: {e}")
     
+    def auto_send_clipboard(self):
+        """Automatically send clipboard after Ctrl+C (no popup)"""
+        if not self.connected:
+            return
+        
+        try:
+            clipboard_text = pyperclip.paste()
+            if clipboard_text:
+                message = {
+                    'type': 'clipboard_sync',
+                    'text': clipboard_text
+                }
+                asyncio.run_coroutine_threadsafe(self.send_message(message), self.loop)
+                logger.info(f"📋 Auto-synced clipboard to server: {len(clipboard_text)} chars")
+        except Exception as e:
+            logger.error(f"Auto clipboard send error: {e}")
+    
     def get_clipboard(self):
         """Request clipboard content from server"""
         if not self.connected:
@@ -155,6 +170,18 @@ class RemoteControlClient:
         except Exception as e:
             logger.error(f"Clipboard request error: {e}")
             messagebox.showerror("Error", f"Failed to request clipboard: {e}")
+    
+    def auto_get_clipboard(self):
+        """Automatically request clipboard before Ctrl+V (no popup)"""
+        if not self.connected:
+            return
+        
+        try:
+            message = {'type': 'clipboard_request'}
+            asyncio.run_coroutine_threadsafe(self.send_message(message), self.loop)
+            logger.info("📋 Auto-requesting clipboard from server for paste")
+        except Exception as e:
+            logger.error(f"Auto clipboard request error: {e}")
     
     def get_normalized_coords(self, event):
         """Convert canvas coordinates to normalized coordinates (0-1 range)"""
@@ -275,9 +302,23 @@ class RemoteControlClient:
             asyncio.run_coroutine_threadsafe(self.send_message(message), self.loop)
     
     def on_key_press(self, event):
-        """Handle key press"""
+        """Handle key press with automatic clipboard sync"""
         if self.connected:
             key = event.keysym
+            
+            # Check for Ctrl+C (copy) - sync local clipboard to server
+            if event.state & 0x4 and key.lower() == 'c':  # 0x4 is Ctrl modifier
+                # Give time for system to update clipboard
+                self.root.after(50, self.auto_send_clipboard)
+                logger.info("📋 Ctrl+C detected - will sync clipboard to server")
+            
+            # Check for Ctrl+V (paste) - get server clipboard first
+            elif event.state & 0x4 and key.lower() == 'v':  # 0x4 is Ctrl modifier
+                # Request clipboard from server before paste happens
+                self.auto_get_clipboard()
+                logger.info("📋 Ctrl+V detected - syncing clipboard from server")
+                return  # Don't send the key yet, wait for clipboard sync
+            
             message = {
                 'type': 'keyboard',
                 'event': 'press',
@@ -362,8 +403,7 @@ class RemoteControlClient:
                     clipboard_text = data.get('text', '')
                     if clipboard_text:
                         pyperclip.copy(clipboard_text)
-                        logger.info(f"📋 Received clipboard from server: {len(clipboard_text)} chars")
-                        self.root.after(0, lambda: messagebox.showinfo("Clipboard", f"Received {len(clipboard_text)} characters from server"))
+                        logger.info(f"📋 Clipboard synced from server: {len(clipboard_text)} chars")
                 elif msg_type == 'server_disconnected':
                     logger.warning("Server disconnected")
                     self.root.after(0, lambda: messagebox.showwarning("Disconnected", "Server disconnected"))
