@@ -104,6 +104,11 @@ class RemoteControlClient:
         # Bind keyboard events
         self.canvas.bind('<KeyPress>', self.on_key_press)
         self.canvas.bind('<KeyRelease>', self.on_key_release)
+        
+        # Bind specific Ctrl+C and Ctrl+V combinations
+        self.canvas.bind('<Control-c>', self.on_ctrl_c)
+        self.canvas.bind('<Control-v>', self.on_ctrl_v)
+        
         self.canvas.focus_set()
         
         # Handle window close
@@ -306,31 +311,10 @@ class RemoteControlClient:
         if self.connected:
             key = event.keysym
             
-            # Detect Ctrl modifier (works on Windows/Linux/Mac)
-            is_ctrl = (event.state & 0x4) or (event.state & 0x40000)  # Ctrl or Command on Mac
-            
-            # Check for Ctrl+C (copy) - sync clipboard to server after copy
-            if is_ctrl and key.lower() == 'c':
-                logger.info("📋 Ctrl+C detected - syncing clipboard to server")
-                # Allow the copy to happen on server first, then sync
-                message = {
-                    'type': 'keyboard',
-                    'event': 'press',
-                    'key': key
-                }
-                asyncio.run_coroutine_threadsafe(self.send_message(message), self.loop)
-                # Sync clipboard after a short delay to let server copy complete
-                self.root.after(200, self.sync_from_server_clipboard)
-                return
-            
-            # Check for Ctrl+V (paste) - sync server clipboard to local first
-            elif is_ctrl and key.lower() == 'v':
-                logger.info("📋 Ctrl+V detected - syncing clipboard from local to server")
-                # Send local clipboard to server first
-                self.auto_send_clipboard()
-                # Then send paste command after clipboard sync
-                self.root.after(200, lambda: self.send_paste_command())
-                return  # Don't send the key immediately
+            # Skip Ctrl+C and Ctrl+V as they're handled by specific bindings
+            is_ctrl = (event.state & 0x4) or (event.state & 0x40000)
+            if is_ctrl and key.lower() in ['c', 'v']:
+                return  # Let the specific handlers deal with these
             
             message = {
                 'type': 'keyboard',
@@ -356,6 +340,37 @@ class RemoteControlClient:
             message = {'type': 'clipboard_request'}
             asyncio.run_coroutine_threadsafe(self.send_message(message), self.loop)
             logger.info("📋 Requesting clipboard from server after copy")
+    
+    def on_ctrl_c(self, event):
+        """Handle Ctrl+C - copy on server then sync to client"""
+        if not self.connected:
+            return
+        
+        logger.info("📋 Ctrl+C pressed - copying on server")
+        # Send Ctrl+C to server
+        message = {
+            'type': 'keyboard',
+            'event': 'press',
+            'key': 'c'
+        }
+        asyncio.run_coroutine_threadsafe(self.send_message(message), self.loop)
+        
+        # Request clipboard from server after copy completes
+        self.root.after(300, self.sync_from_server_clipboard)
+        return "break"  # Prevent default Tkinter behavior
+    
+    def on_ctrl_v(self, event):
+        """Handle Ctrl+V - sync client clipboard to server then paste"""
+        if not self.connected:
+            return
+        
+        logger.info("📋 Ctrl+V pressed - syncing clipboard to server")
+        # Send local clipboard to server first
+        self.auto_send_clipboard()
+        
+        # Then send paste command after clipboard sync
+        self.root.after(300, self.send_paste_command)
+        return "break"  # Prevent default Tkinter behavior
     
     def on_key_release(self, event):
         """Handle key release"""
