@@ -18,6 +18,8 @@ import logging
 import sys
 import pyperclip
 from pynput import keyboard
+import tkinter as tk
+from threading import Thread
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -43,6 +45,8 @@ class RemoteControlServer:
         self.communication_buffer = ""
         self.keyboard_listener = None
         self.current_client_id = None
+        self.event_loop = None  # Store the asyncio event loop
+        self.comm_window = None  # Communication input window
         
     async def capture_screen(self, quality=95, scale=1.0):
         """Capture screen and return as base64 encoded JPEG"""
@@ -173,22 +177,28 @@ class RemoteControlServer:
     def start_keyboard_listener(self):
         """Start listening to server keyboard for communication mode"""
         shift_pressed = False
+        ctrl_pressed = False
+        both_pressed = False  # Track if both were pressed together
         
         def on_press(key):
-            nonlocal shift_pressed
+            nonlocal shift_pressed, ctrl_pressed, both_pressed
             
-            # Track shift key
+            # Track shift and ctrl keys
             if key in [keyboard.Key.shift, keyboard.Key.shift_r]:
                 shift_pressed = True
+            if key in [keyboard.Key.ctrl, keyboard.Key.ctrl_r, keyboard.Key.ctrl_l]:
+                ctrl_pressed = True
             
-            # Check for CapsLock while shift is pressed
-            if key == keyboard.Key.caps_lock and shift_pressed:
+            # Check if both are now pressed and we haven't triggered yet
+            if shift_pressed and ctrl_pressed and not both_pressed:
+                both_pressed = True
                 # Toggle communication mode
+                logger.info(f"🔄 Toggling communication mode from {self.communication_mode} to {not self.communication_mode}")
                 self.toggle_communication_mode(not self.communication_mode)
-                return
             
-            # If in communication mode, capture text
+            # If in communication mode, capture and send text
             if self.communication_mode:
+                # Capture text keys and send to client
                 try:
                     if hasattr(key, 'char') and key.char:
                         # Regular character
@@ -196,22 +206,32 @@ class RemoteControlServer:
                     elif key == keyboard.Key.space:
                         self.send_communication_text(' ')
                     elif key == keyboard.Key.backspace:
-                        self.send_communication_text('\b')  # Backspace signal
+                        self.send_communication_text('\b')
                     elif key == keyboard.Key.enter:
                         self.send_communication_text('\n')
                 except Exception as e:
                     logger.error(f"Communication text error: {e}")
         
         def on_release(key):
-            nonlocal shift_pressed
+            nonlocal shift_pressed, ctrl_pressed, both_pressed
             
-            # Track shift key release
+            # Track key releases
             if key in [keyboard.Key.shift, keyboard.Key.shift_r]:
                 shift_pressed = False
+                # Reset both_pressed only after both are released
+                if not ctrl_pressed:
+                    both_pressed = False
+            if key in [keyboard.Key.ctrl, keyboard.Key.ctrl_r, keyboard.Key.ctrl_l]:
+                ctrl_pressed = False
+                # Reset both_pressed only after both are released
+                if not shift_pressed:
+                    both_pressed = False
         
-        self.keyboard_listener = keyboard.Listener(on_press=on_press, on_release=on_release)
+        self.keyboard_listener = keyboard.Listener(
+            on_press=on_press, 
+            on_release=on_release
+        )
         self.keyboard_listener.start()
-        logger.info("⌨️ Keyboard listener started for communication mode")
         logger.info("⌨️ Keyboard listener started for communication mode")
     
     def toggle_communication_mode(self, enabled):
@@ -220,23 +240,149 @@ class RemoteControlServer:
         if enabled:
             logger.info("🗨️ Communication mode ENABLED - typing will be sent to client")
             self.communication_buffer = ""
-            # Send notification to client
-            asyncio.create_task(self.send_communication_notification(True))
+            # Open invisible input window
+            self.open_communication_window()
+            # Send notification to client using thread-safe method
+            if self.event_loop:
+                asyncio.run_coroutine_threadsafe(
+                    self.send_communication_notification(True), 
+                    self.event_loop
+                )
         else:
             logger.info("🚫 Communication mode DISABLED - normal typing restored")
-            # Send notification to client
-            asyncio.create_task(self.send_communication_notification(False))
+            # Close communication window
+            self.close_communication_window()
+            # Send notification to client using thread-safe method
+            if self.event_loop:
+                asyncio.run_coroutine_threadsafe(
+                    self.send_communication_notification(False), 
+                    self.event_loop
+                )
             self.communication_buffer = ""
+    
+    def open_communication_window(self):
+        """Open an invisible focused window for communication input"""
+        import time
+        
+        # First, simulate a click on empty space to remove focus from any text box
+        try:
+            import pyautogui
+            # Click on a corner of the screen to remove focus
+            pyautogui.click(5, 5)
+            time.sleep(0.05)
+        except:
+            pass
+        
+        def create_window():
+            # Small delay to ensure click is processed
+            time.sleep(0.1)
+            
+            window = tk.Tk()
+            window.title("Communication Mode Active")
+            
+            # Make window fullscreen and invisible
+            window.attributes('-alpha', 0.01)  # Almost invisible
+            window.attributes('-topmost', True)  # Always on top
+            window.attributes('-fullscreen', True)  # Fullscreen to block everything
+            window.overrideredirect(True)  # No window decorations
+            
+            # Store reference
+            self.comm_window = window
+            
+            # Create text widget to capture input
+            text_widget = tk.Text(window, width=1, height=1, bg='black')
+            text_widget.pack()
+            
+            # Force focus to this window aggressively
+            window.update()
+            window.lift()
+            window.focus_force()
+            text_widget.focus_set()
+            window.update()
+            
+            # Bind key events
+            def on_key(event):
+                char = event.char
+                keysym = event.keysym
+                
+                if char:  # Regular character
+                    self.send_communication_text(char)
+                    return "break"  # Prevent default behavior
+                elif keysym == 'BackSpace':
+                    self.send_communication_text('\b')
+                    return "break"
+                elif keysym == 'Return':
+                    self.send_communication_text('\n')
+                    return "break"
+                elif keysym == 'space':
+                    self.send_communication_text(' ')
+                    return "break"
+                
+                return "break"  # Block all other keys from typing
+            
+            text_widget.bind('<Key>', on_key)
+            
+            # Ultra-aggressive focus stealing - every 5ms initially, then 10ms
+            focus_count = 0
+            def keep_focus():
+                nonlocal focus_count
+                try:
+                    if self.communication_mode and self.comm_window is window:
+                        window.lift()
+                        window.attributes('-topmost', True)
+                        window.focus_force()
+                        text_widget.focus_set()
+                        
+                        focus_count += 1
+                        # First 100 iterations every 5ms (0.5 seconds), then slow to 10ms
+                        interval = 5 if focus_count < 100 else 10
+                        window.after(interval, keep_focus)
+                    else:
+                        # Communication mode disabled, close window
+                        window.quit()
+                        window.destroy()
+                except tk.TclError:
+                    pass
+                except:
+                    pass
+            
+            keep_focus()
+            
+            try:
+                window.mainloop()
+            except:
+                pass
+            finally:
+                try:
+                    window.destroy()
+                except:
+                    pass
+        
+        # Run in separate thread
+        thread = Thread(target=create_window, daemon=True)
+        thread.start()
+    
+    def close_communication_window(self):
+        """Close the communication window"""
+        if self.comm_window:
+            try:
+                # Just set flag - the keep_focus loop will handle cleanup
+                self.comm_window = None
+            except:
+                pass
     
     def send_communication_text(self, text):
         """Send communication text to client"""
-        if self.websocket and self.current_client_id:
+        if self.websocket and self.current_client_id and self.event_loop:
             message = {
                 'type': 'communication_text',
                 'text': text,
                 'target_client': self.current_client_id
             }
-            asyncio.create_task(self.websocket.send(json.dumps(message)))
+            asyncio.run_coroutine_threadsafe(
+                self.websocket.send(json.dumps(message)),
+                self.event_loop
+            )
     
     async def send_communication_notification(self, enabled):
         """Send communication mode status to client"""
@@ -260,6 +406,8 @@ class RemoteControlServer:
                     if msg_type == 'registered':
                         logger.info(f"✅ Successfully registered with relay as '{self.server_id}'")
                         self.connected = True
+                        # Store event loop for thread-safe async calls
+                        self.event_loop = asyncio.get_running_loop()
                         # Start keyboard listener for communication mode
                         if not self.keyboard_listener:
                             self.start_keyboard_listener()
