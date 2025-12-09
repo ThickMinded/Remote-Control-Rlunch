@@ -477,6 +477,11 @@ class RemoteControlClient:
     
     def append_communication_text(self, text):
         """Append text to communication display"""
+        # Only append if we're actually in communication mode
+        if not self.communication_mode:
+            logger.debug("Ignoring text - communication mode not active")
+            return
+            
         if text == '\b':  # Backspace
             if self.communication_text:
                 self.communication_text = self.communication_text[:-1]
@@ -489,8 +494,8 @@ class RemoteControlClient:
         if len(self.communication_text) > 200:
             self.communication_text = self.communication_text[-200:]
         
-        if self.communication_mode:
-            self.draw_communication_overlay()
+        # Always redraw when text changes
+        self.draw_communication_overlay()
     
     async def receive_frames(self):
         """Continuously request and receive frames"""

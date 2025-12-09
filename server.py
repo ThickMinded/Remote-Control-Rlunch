@@ -237,8 +237,11 @@ class RemoteControlServer:
                 )
         else:
             logger.info("🚫 Communication mode DISABLED - normal typing restored")
-            # Close communication window
+            # Close communication window first
             self.close_communication_window()
+            # Wait to ensure all pending text messages are sent before sending disable notification
+            import time
+            time.sleep(0.3)
             # Send notification to client using thread-safe method
             if self.event_loop:
                 asyncio.run_coroutine_threadsafe(
