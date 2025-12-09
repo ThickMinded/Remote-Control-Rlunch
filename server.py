@@ -139,7 +139,17 @@ class RemoteControlServer:
             key = data.get('key', '')
             
             if event_type == 'press':
-                pyautogui.press(key)
+                # Handle Ctrl+C and Ctrl+V as hotkeys for proper execution
+                if key.lower() == 'c':
+                    # This is Ctrl+C from client, execute copy
+                    pyautogui.hotkey('ctrl', 'c')
+                    logger.info("📋 Executed Ctrl+C (copy) on server")
+                elif key.lower() == 'v':
+                    # This is Ctrl+V from client, execute paste
+                    pyautogui.hotkey('ctrl', 'v')
+                    logger.info("📋 Executed Ctrl+V (paste) on server")
+                else:
+                    pyautogui.press(key)
             elif event_type == 'down':
                 pyautogui.keyDown(key)
             elif event_type == 'up':
