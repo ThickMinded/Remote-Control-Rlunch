@@ -2,7 +2,7 @@
 """
 Remote Control Server - Host side
 Captures screen and handles remote mouse/keyboard control
-Connects to Replit relay for internet access
+Connects to Heroku relay for internet access
 Works without admin privileges
 """
 
@@ -24,19 +24,19 @@ logger = logging.getLogger(__name__)
 pyautogui.FAILSAFE = True
 pyautogui.PAUSE = 0.01
 
-DEFAULT_RELAY_URL = "wss://remote-control-relay.up.railway.app"
-
-
 class RemoteControlServer:
-    def __init__(self, relay_url=DEFAULT_RELAY_URL, server_id='my_computer'):
+    def __init__(self, relay_url='wss://obscure-crag-09189-c525dbc46d88.herokuapp.com', server_id='my_computer'):
         self.relay_url = relay_url
         self.server_id = server_id
         self.websocket = None
         self.screen_width, self.screen_height = pyautogui.size()
         self.running = False
         self.connected = False
+        # Store last client cursor position without moving actual cursor
+        self.client_cursor_x = 0
+        self.client_cursor_y = 0
         
-    async def capture_screen(self, quality=30, scale=0.5):
+    async def capture_screen(self, quality=95, scale=1.0):
         """Capture screen and return as base64 encoded JPEG"""
         try:
             with mss.mss() as sct:
@@ -70,7 +70,7 @@ class RemoteControlServer:
             logger.error(f"Screen capture error: {e}")
             return None
     
-    def handle_mouse_event(self, data):
+    async def handle_mouse_event(self, data):
         """Handle mouse events with accurate positioning"""
         try:
             event_type = data.get('event')
@@ -79,23 +79,48 @@ class RemoteControlServer:
             x = int(data.get('x', 0) * self.screen_width)
             y = int(data.get('y', 0) * self.screen_height)
             
+            # Store position but don't move cursor for 'move' events
             if event_type == 'move':
-                pyautogui.moveTo(x, y, duration=0)
+                # Just store the position, don't actually move the cursor
+                self.client_cursor_x = x
+                self.client_cursor_y = y
+                # Don't call pyautogui.moveTo() - this keeps cursor stationary
                 
             elif event_type == 'click':
+                # Move to position, click, then return cursor to original position
+                original_pos = pyautogui.position()
                 button = data.get('button', 'left')
-                pyautogui.click(x, y, button=button)
+                pyautogui.moveTo(x, y, duration=0)  # Move first
+                await asyncio.sleep(0.01)  # Small delay to ensure movement completes
+                pyautogui.click(button=button)  # Click at current position
+                await asyncio.sleep(0.01)  # Small delay to ensure click registers
+                pyautogui.moveTo(original_pos[0], original_pos[1], duration=0)  # Return
                 
             elif event_type == 'double_click':
-                pyautogui.doubleClick(x, y)
+                original_pos = pyautogui.position()
+                pyautogui.moveTo(x, y, duration=0)
+                await asyncio.sleep(0.01)
+                pyautogui.doubleClick()
+                await asyncio.sleep(0.01)
+                pyautogui.moveTo(original_pos[0], original_pos[1], duration=0)
                 
             elif event_type == 'down':
+                original_pos = pyautogui.position()
                 button = data.get('button', 'left')
-                pyautogui.mouseDown(x, y, button=button)
+                pyautogui.moveTo(x, y, duration=0)
+                await asyncio.sleep(0.01)
+                pyautogui.mouseDown(button=button)
+                await asyncio.sleep(0.01)
+                pyautogui.moveTo(original_pos[0], original_pos[1], duration=0)
                 
             elif event_type == 'up':
+                original_pos = pyautogui.position()
                 button = data.get('button', 'left')
-                pyautogui.mouseUp(x, y, button=button)
+                pyautogui.moveTo(x, y, duration=0)
+                await asyncio.sleep(0.01)
+                pyautogui.mouseUp(button=button)
+                await asyncio.sleep(0.01)
+                pyautogui.moveTo(original_pos[0], original_pos[1], duration=0)
                 
             elif event_type == 'scroll':
                 scroll_amount = data.get('amount', 0)
@@ -142,14 +167,14 @@ class RemoteControlServer:
                         continue
                     
                     if msg_type == 'mouse':
-                        self.handle_mouse_event(data)
+                        await self.handle_mouse_event(data)
                     elif msg_type == 'keyboard':
                         self.handle_keyboard_event(data)
                     elif msg_type == 'request_frame':
                         # Send screen capture back through relay
                         frame = await self.capture_screen(
-                            quality=data.get('quality', 30),
-                            scale=data.get('scale', 0.5)
+                            quality=data.get('quality', 95),
+                            scale=data.get('scale', 1.0)
                         )
                         if frame and client_id:
                             frame['target_client'] = client_id
@@ -177,7 +202,7 @@ class RemoteControlServer:
             self.connected = False
     
     async def connect_to_relay(self):
-        """Connect to Replit relay server"""
+        """Connect to Heroku relay server"""
         self.running = True
         retry_count = 0
         max_retries = 5
@@ -230,16 +255,16 @@ def main():
     print("=" * 70)
     print("🖥️  Remote Control Server (Host Computer)")
     print("=" * 70)
-    print("This computer will be controlled remotely via Replit relay")
+    print("This computer will be controlled remotely via Heroku relay")
     print()
     
     # Get relay URL from user or use default
     if len(sys.argv) > 1:
         relay_url = sys.argv[1]
     else:
-        relay_url = input("Enter Replit relay URL (or press Enter for default): ").strip()
+        relay_url = input("Enter Heroku relay URL (or press Enter for default): ").strip()
         if not relay_url:
-            relay_url = DEFAULT_RELAY_URL
+            relay_url = "wss://obscure-crag-09189-c525dbc46d88.herokuapp.com"
     
     # Get server ID
     if len(sys.argv) > 2:

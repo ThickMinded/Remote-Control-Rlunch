@@ -1,42 +1,8 @@
-run = "pip install -q websockets && python3 relay.py"
+run = "python relay.py"
 entrypoint = "relay.py"
-modules = ["python-3.11"]
 
 [nix]
 channel = "stable-23_05"
-packages = ["freetype", "lcms2", "libimagequant", "libjpeg", "libtiff", "libwebp", "libxcrypt", "openjpeg", "scrot", "tcl", "tk", "xvfb-run", "zlib"]
 
 [deployment]
-run = ["python", "relay.py"]
-deploymentTarget = "vm"
-
-[agent]
-expertMode = true
-
-[workflows]
-runButton = "Project"
-
-[[workflows.workflow]]
-name = "Project"
-mode = "parallel"
-author = "agent"
-
-[[workflows.workflow.tasks]]
-task = "workflow.run"
-args = "Relay Server"
-
-[[workflows.workflow]]
-name = "Relay Server"
-author = "agent"
-
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "python relay.py"
-waitForPort = 5000
-
-[workflows.workflow.metadata]
-outputType = "webview"
-
-[[ports]]
-localPort = 5000
-externalPort = 80
+run = ["sh", "-c", "python relay.py"]

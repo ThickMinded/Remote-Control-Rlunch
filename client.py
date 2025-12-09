@@ -36,7 +36,6 @@ class RemoteControlClient:
         self.display_scale = 1.0
         
         # Relay and server info
-        self.relay_url = "wss://remote-control-relay.up.railway.app"
         self.server_id = "my_computer"
         
         # Create UI
@@ -45,6 +44,12 @@ class RemoteControlClient:
         # Frame rate control
         self.fps = 10
         self.frame_interval = 1.0 / self.fps
+        
+        # Track displayed image dimensions for accurate coordinate mapping
+        self.displayed_img_width = 0
+        self.displayed_img_height = 0
+        self.img_offset_x = 0
+        self.img_offset_y = 0
         
     def create_ui(self):
         """Create the user interface"""
@@ -55,13 +60,13 @@ class RemoteControlClient:
         
         # Connection controls
         tk.Label(control_frame, text="Relay URL:", bg='#2b2b2b', fg='white').pack(side=tk.LEFT, padx=5)
-        self.url_entry = tk.Entry(control_frame, width=40)
-        self.url_entry.insert(0, self.relay_url)
+        self.url_entry = tk.Entry(control_frame, width=30)
+        self.url_entry.insert(0, "wss://obscure-crag-09189-c525dbc46d88.herokuapp.com")
         self.url_entry.pack(side=tk.LEFT, padx=5)
         
         tk.Label(control_frame, text="Server ID:", bg='#2b2b2b', fg='white').pack(side=tk.LEFT, padx=5)
         self.server_entry = tk.Entry(control_frame, width=15)
-        self.server_entry.insert(0, self.server_id)
+        self.server_entry.insert(0, "my_computer")
         self.server_entry.pack(side=tk.LEFT, padx=5)
         
         self.connect_btn = tk.Button(control_frame, text="Connect", command=self.toggle_connection, 
@@ -110,15 +115,16 @@ class RemoteControlClient:
     
     def get_normalized_coords(self, event):
         """Convert canvas coordinates to normalized coordinates (0-1 range)"""
-        canvas_width = self.canvas.winfo_width()
-        canvas_height = self.canvas.winfo_height()
-        
-        if canvas_width == 0 or canvas_height == 0:
+        if self.displayed_img_width == 0 or self.displayed_img_height == 0:
             return 0.0, 0.0
         
-        # Normalize to 0-1 range
-        norm_x = event.x / canvas_width
-        norm_y = event.y / canvas_height
+        # Adjust for image offset (since image is centered on canvas)
+        img_x = event.x - self.img_offset_x
+        img_y = event.y - self.img_offset_y
+        
+        # Convert to normalized coordinates based on displayed image size
+        norm_x = img_x / self.displayed_img_width
+        norm_y = img_y / self.displayed_img_height
         
         # Clamp to valid range
         norm_x = max(0.0, min(1.0, norm_x))
@@ -259,8 +265,17 @@ class RemoteControlClient:
             canvas_height = self.canvas.winfo_height()
             
             if canvas_width > 1 and canvas_height > 1:
+                # Store original size before thumbnail
+                original_width, original_height = img.size
+                
                 # Resize to fit canvas while maintaining aspect ratio
                 img.thumbnail((canvas_width, canvas_height), Image.Resampling.LANCZOS)
+                
+                # Store actual displayed image size and offset
+                self.displayed_img_width = img.width
+                self.displayed_img_height = img.height
+                self.img_offset_x = (canvas_width - img.width) // 2
+                self.img_offset_y = (canvas_height - img.height) // 2
                 
                 # Convert to PhotoImage
                 photo = ImageTk.PhotoImage(img)
@@ -284,8 +299,8 @@ class RemoteControlClient:
                 # Request frame
                 await self.send_message({
                     'type': 'request_frame',
-                    'quality': 30,
-                    'scale': 0.5
+                    'quality': 95,
+                    'scale': 1.0
                 })
                 
                 # Wait for frame
