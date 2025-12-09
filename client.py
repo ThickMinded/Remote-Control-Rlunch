@@ -436,7 +436,7 @@ class RemoteControlClient:
         self.communication_mode = enabled
         if enabled:
             logger.info("💬 Communication mode enabled - server is typing to you")
-            self.communication_text = ""
+            # Don't clear text - keep existing messages
             self.draw_communication_overlay()
         else:
             logger.info("💬 Communication mode disabled - messages will stay for 10 seconds")
@@ -511,8 +511,8 @@ class RemoteControlClient:
                 # Request frame (don't wait for display to complete)
                 await self.send_message({
                     'type': 'request_frame',
-                    'quality': 75,
-                    'scale': 0.8
+                    'quality': 85,
+                    'scale': 1.0
                 })
                 
                 # Wait for frame with longer timeout

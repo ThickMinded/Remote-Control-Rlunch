@@ -60,7 +60,8 @@ class RemoteControlServer:
                 
                 # Scale down for better performance
                 new_size = (int(img.width * scale), int(img.height * scale))
-                img = img.resize(new_size, Image.Resampling.BILINEAR)
+                if scale != 1.0:
+                    img = img.resize(new_size, Image.Resampling.NEAREST)
                 
                 # Compress as JPEG
                 buffer = io.BytesIO()
