@@ -439,9 +439,15 @@ class RemoteControlClient:
             self.communication_text = ""
             self.draw_communication_overlay()
         else:
-            logger.info("💬 Communication mode disabled")
+            logger.info("💬 Communication mode disabled - messages will stay for 10 seconds")
+            # Don't clear immediately - wait 10 seconds
+            self.root.after(10000, self.clear_communication_overlay)
+    
+    def clear_communication_overlay(self):
+        """Clear communication overlay after delay"""
+        # Only clear if communication mode is still off
+        if not self.communication_mode:
             self.communication_text = ""
-            # Immediately clear overlay
             if self.comm_overlay:
                 self.canvas.delete(self.comm_overlay)
                 self.comm_overlay = None

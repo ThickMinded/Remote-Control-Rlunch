@@ -216,11 +216,7 @@ class RemoteControlServer:
             on_release=on_release
         )
         self.keyboard_listener.start()
-        logger.info("⌨️ Keyboard listener started for communication mode")
-        
-        # Start communication window immediately and keep it running
-        self.open_communication_window()
-        logger.info("💬 Communication window ready (Ctrl+Shift to activate)")
+        logger.info("⌨️ Keyboard listener started (Ctrl+Shift to toggle communication mode)")
     
     def toggle_communication_mode(self, enabled):
         """Toggle communication mode on/off"""
@@ -324,15 +320,19 @@ class RemoteControlServer:
             
             text_widget.bind('<KeyPress>', on_key)
             
-            # Keep window alive indefinitely with focus stealing
+            # Keep window alive while communication mode is active
             def keep_focus():
                 try:
-                    if self.comm_window is window:
+                    if self.communication_mode and self.comm_window is window:
                         window.lift()
                         window.attributes('-topmost', True)
                         window.focus_force()
                         text_widget.focus_set()
-                        window.after(100, keep_focus)  # 100ms - stable and efficient
+                        window.after(100, keep_focus)
+                    else:
+                        # Communication mode disabled, close window
+                        window.quit()
+                        window.destroy()
                 except tk.TclError:
                     pass
                 except:
