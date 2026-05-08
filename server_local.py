@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """
-Remote Control Server - Host side
-Captures screen and handles remote mouse/keyboard control
-Connects to Heroku relay for internet access
-Works without admin privileges
+Remote Control Server - Local Network Version
+Hosts a WebSocket server for direct local network connections
+No relay required - client connects directly to this server
 """
 
 import asyncio
@@ -11,7 +10,6 @@ import websockets
 import json
 import base64
 import io
-import time
 import pyautogui
 import mss
 from PIL import Image
@@ -19,11 +17,10 @@ import logging
 import sys
 import pyperclip
 from pynput import keyboard
-import tkinter as tk
-from threading import Thread, Event, Lock
-from queue import Queue, Empty
-import ctypes
+import socket
+from datetime import datetime
 import os
+import ctypes
 
 # Hide console window on Windows
 if sys.platform == 'win32':
@@ -37,8 +34,8 @@ if sys.platform == 'win32':
     except Exception:
         pass  # Silently fail if hiding doesn't work
 
-# Configure logging to both console and file
-file_handler = logging.FileHandler('server.log', mode='w', encoding='utf-8')
+# Configure logging
+file_handler = logging.FileHandler('server_local.log', mode='w', encoding='utf-8')
 file_handler.setLevel(logging.INFO)
 file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
 
@@ -52,50 +49,43 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 logger.info("=" * 60)
-logger.info("Server logging initialized - all events will be saved to server.log")
+logger.info("Local Server logging initialized")
 logger.info("=" * 60)
 
-# Configure pyautogui for safety
+# Configure pyautogui
 pyautogui.FAILSAFE = True
 pyautogui.PAUSE = 0.01
 
-class RemoteControlServer:
-    def __init__(self, relay_url='wss://ancient-bastion-15588-6a7ee50abf00.herokuapp.com', server_id='my_computer'):
-        self.relay_url = relay_url
-        self.server_id = server_id
+class LocalRemoteControlServer:
+    def __init__(self, host='0.0.0.0', port=8765):
+        self.host = host
+        self.port = port
         self.websocket = None
         self.screen_width, self.screen_height = pyautogui.size()
         self.running = False
-        self.connected = False
-        # Store last client cursor position without moving actual cursor
-        self.client_cursor_x = 0
-        self.client_cursor_y = 0
+        self.connected_clients = set()
         
-        # Simple communication mode - just toggle on/off with Ctrl+Shift+C
+        # Communication mode
         self.communication_mode = False
         self.keyboard_listener = None
-        self.current_client_id = None
-        self.event_loop = None
-        self._ws_send_lock = None
-        self.text_buffer = []  # Buffer for typed characters
-        self.last_send_time = 0
+        self.current_client = None
     
     async def capture_screen(self, quality=95, scale=1.0):
-        """Capture screen without blocking the main asyncio loop"""
+        """Capture screen"""
         return await asyncio.to_thread(self._capture_screen_sync, quality, scale)
 
     def _capture_screen_sync(self, quality=95, scale=1.0):
-        """Synchronous portion of screen capture (runs in worker thread)"""
+        """Synchronous screen capture"""
         try:
             with mss.mss() as sct:
-                monitor = sct.monitors[1]  # Primary monitor
+                monitor = sct.monitors[1]
                 screenshot = sct.grab(monitor)
                 img = Image.frombytes('RGB', screenshot.size, screenshot.rgb)
                 new_size = (int(img.width * scale), int(img.height * scale))
                 if scale != 1.0:
-                    img = img.resize(new_size, Image.Resampling.BILINEAR)  # Faster than LANCZOS
+                    img = img.resize(new_size, Image.Resampling.BILINEAR)
                 buffer = io.BytesIO()
-                img.save(buffer, format='JPEG', quality=quality, optimize=False)  # Disable optimize for speed
+                img.save(buffer, format='JPEG', quality=quality, optimize=False)
                 img_bytes = buffer.getvalue()
                 img_base64 = base64.b64encode(img_bytes).decode('utf-8')
                 return {
@@ -141,11 +131,9 @@ class RemoteControlServer:
             }
     
     async def handle_mouse_event(self, data):
-        """Handle mouse events with accurate positioning"""
+        """Handle mouse events"""
         try:
             event_type = data.get('event')
-            
-            # Convert coordinates from client to server screen
             x = int(data.get('x', 0) * self.screen_width)
             y = int(data.get('y', 0) * self.screen_height)
             detached = data.get('detached', False)
@@ -154,8 +142,6 @@ class RemoteControlServer:
                 # Always move cursor to make it visible (unless detached)
                 if not detached:
                     pyautogui.moveTo(x, y, duration=0)
-                self.client_cursor_x = x
-                self.client_cursor_y = y
                 
             elif event_type == 'click':
                 button = data.get('button', 'left')
@@ -196,15 +182,12 @@ class RemoteControlServer:
             key = data.get('key', '')
             
             if event_type == 'press':
-                # Handle Ctrl+C and Ctrl+V as hotkeys for proper execution
                 if key.lower() == 'c':
-                    # This is Ctrl+C from client, execute copy
                     pyautogui.hotkey('ctrl', 'c')
-                    logger.info("📋 Executed Ctrl+C (copy) on server")
+                    logger.info("📋 Executed Ctrl+C (copy)")
                 elif key.lower() == 'v':
-                    # This is Ctrl+V from client, execute paste
                     pyautogui.hotkey('ctrl', 'v')
-                    logger.info("📋 Executed Ctrl+V (paste) on server")
+                    logger.info("📋 Executed Ctrl+V (paste)")
                 else:
                     pyautogui.press(key)
             elif event_type == 'down':
@@ -221,7 +204,7 @@ class RemoteControlServer:
             logger.error(f"Keyboard event error: {e}")
     
     def start_keyboard_listener(self):
-        """Start listening to server keyboard for communication mode toggle"""
+        """Start keyboard listener for communication mode"""
         from pynput.keyboard import Key, KeyCode, Listener
         
         keys_pressed = set()
@@ -229,13 +212,11 @@ class RemoteControlServer:
         def on_press(key):
             keys_pressed.add(key)
             
-            # Check for Ctrl+Shift+C to toggle communication mode
             ctrl = Key.ctrl_l in keys_pressed or Key.ctrl in keys_pressed
             shift = Key.shift in keys_pressed or Key.shift_r in keys_pressed
             c_key = KeyCode.from_char('c') in keys_pressed or KeyCode.from_char('C') in keys_pressed
             
             if ctrl and shift and c_key:
-                # Toggle communication mode
                 self.toggle_communication_mode(not self.communication_mode)
         
         def on_release(key):
@@ -246,222 +227,185 @@ class RemoteControlServer:
         
         self.keyboard_listener = Listener(on_press=on_press, on_release=on_release)
         self.keyboard_listener.start()
-        logger.info("⌨️ Keyboard listener started (Ctrl+Shift+C to toggle communication mode)")
+        logger.info("⌨️ Keyboard listener started (Ctrl+Shift+C for communication mode)")
     
     def toggle_communication_mode(self, enabled):
-        """Toggle communication mode on/off"""
+        """Toggle communication mode"""
         self.communication_mode = enabled
         logger.info(f"💬 Communication mode {'ENABLED' if enabled else 'DISABLED'}")
         
         # Notify client
-        if self.event_loop:
-            asyncio.run_coroutine_threadsafe(
-                self.send_communication_notification(enabled),
-                self.event_loop
-            )
+        if self.current_client:
+            asyncio.create_task(self.send_to_client(self.current_client, {
+                'type': 'communication_mode',
+                'enabled': enabled
+            }))
     
-    async def _safe_send(self, message):
-        """Serialize websocket sends to avoid concurrent send errors"""
-        if not self.websocket:
-            return
-        # Check if websocket is still open
+    async def send_to_client(self, websocket, message):
+        """Send message to specific client"""
         try:
-            if self.websocket.close_code is not None:
-                logger.warning("Attempted to send on closed websocket - skipping")
-                return
-        except AttributeError:
-            # If close_code doesn't exist, connection is likely fine
-            pass
-        payload = message if isinstance(message, str) else json.dumps(message)
-        lock = self._ws_send_lock
-        try:
-            if lock:
-                async with lock:
-                    await self.websocket.send(payload)
-            else:
-                await self.websocket.send(payload)
-        except websockets.exceptions.ConnectionClosed as e:
-            logger.warning(f"_safe_send connection closed: code={getattr(e, 'code', '?')} reason={getattr(e, 'reason', '?')}")
-            # Don't set connected=False - let the main receive loop handle it
+            if websocket:
+                await websocket.send(json.dumps(message))
         except Exception as e:
-            logger.error(f"_safe_send error: {e}")
-            # Don't set connected=False - let the main receive loop handle it
-
-    async def send_communication_notification(self, enabled):
-        """Send communication mode status to client"""
-        if self.websocket and self.current_client_id:
-            try:
-                message = {
-                    'type': 'communication_mode',
-                    'enabled': enabled,
-                    'target_client': self.current_client_id
-                }
-                await self._safe_send(message)
-            except Exception as e:
-                logger.error(f"Failed to send communication notification: {e}")
+            logger.error(f"Send error: {e}")
     
-    async def handle_relay_messages(self):
-        """Handle messages from relay (forwarded from clients)"""
+    async def handle_client(self, websocket, path=None):
+        """Handle client connection"""
+        client_addr = websocket.remote_address
+        logger.info(f"✅ Client connected: {client_addr}")
+        self.connected_clients.add(websocket)
+        self.current_client = websocket
+        
+        # Start keyboard listener if not already running
+        if not self.keyboard_listener:
+            self.start_keyboard_listener()
+        
         try:
-            async for message in self.websocket:
+            async for message in websocket:
                 try:
                     data = json.loads(message)
                     msg_type = data.get('type')
-                    client_id = data.get('client_id')  # Added by relay
-                    
-                    if msg_type == 'registered':
-                        logger.info(f"✅ Successfully registered with relay as '{self.server_id}'")
-                        self.connected = True
-                        # Store event loop for thread-safe async calls
-                        self.event_loop = asyncio.get_running_loop()
-                        if not self._ws_send_lock:
-                            self._ws_send_lock = asyncio.Lock()
-                        # Start keyboard listener for communication mode
-                        if not self.keyboard_listener:
-                            self.start_keyboard_listener()
-                        continue
-                    
-                    # Store current client ID for communication
-                    if client_id:
-                        self.current_client_id = client_id
                     
                     if msg_type == 'mouse':
                         await self.handle_mouse_event(data)
+                        
                     elif msg_type == 'keyboard':
                         self.handle_keyboard_event(data)
+                        
                     elif msg_type == 'clipboard_sync':
-                        # Receive clipboard content from client
                         clipboard_text = data.get('text', '')
                         if clipboard_text:
                             pyperclip.copy(clipboard_text)
                             logger.info(f"📋 Clipboard synced from client: {len(clipboard_text)} chars")
+                            
                     elif msg_type == 'clipboard_request':
-                        # Send clipboard content to client
                         try:
                             clipboard_text = pyperclip.paste()
-                            clipboard_msg = {
+                            await self.send_to_client(websocket, {
                                 'type': 'clipboard_data',
-                                'text': clipboard_text,
-                                'target_client': client_id
-                            }
-                            await self._safe_send(clipboard_msg)
+                                'text': clipboard_text
+                            })
                             logger.info(f"📋 Sent clipboard to client: {len(clipboard_text)} chars")
                         except Exception as e:
-                            logger.error(f"Clipboard read error: {e}")
+                            logger.error(f"Clipboard error: {e}")
+                            
                     elif msg_type == 'request_frame':
-                        # Send screen capture back through relay
                         frame = await self.capture_screen(
                             quality=data.get('quality', 95),
                             scale=data.get('scale', 1.0)
                         )
-                        if frame and client_id:
-                            frame['target_client'] = client_id
-                            await self._safe_send(frame)
+                        if frame:
+                            await self.send_to_client(websocket, frame)
+                            
                     elif msg_type == 'info_request':
-                        # Send screen info to requesting client
                         info = {
                             'type': 'info',
                             'screen_width': self.screen_width,
-                            'screen_height': self.screen_height,
-                            'target_client': client_id
+                            'screen_height': self.screen_height
                         }
-                        await self._safe_send(info)
+                        await self.send_to_client(websocket, info)
+                        
                     elif msg_type == 'screenshot_request':
-                        # Capture and send screenshot to client
                         result = await self.capture_screenshot()
-                        if client_id:
-                            result['target_client'] = client_id
-                        await self._safe_send(result)
-                            
+                        await self.send_to_client(websocket, result)
+                        
                 except json.JSONDecodeError:
-                    logger.error("Invalid JSON received from relay")
+                    logger.error("Invalid JSON received")
                 except Exception as e:
                     logger.error(f"Message handling error: {e}")
                     
-        except websockets.exceptions.ConnectionClosed as e:
-            logger.warning(f"⚠️ Connection to relay closed: code={getattr(e, 'code', '?')} reason={getattr(e, 'reason', '?')}")
-            self.connected = False
+        except websockets.exceptions.ConnectionClosed:
+            logger.info(f"⚠️ Client disconnected: {client_addr}")
         except Exception as e:
-            logger.exception(f"Relay message handler error: {e}")
-            self.connected = False
+            logger.error(f"Client handler error: {e}")
+        finally:
+            self.connected_clients.discard(websocket)
+            if self.current_client == websocket:
+                self.current_client = None
     
-    async def connect_to_relay(self):
-        """Connect to Heroku relay server"""
+    def get_local_ip(self):
+        """Get local IP address"""
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+            s.close()
+            return ip
+        except Exception:
+            return "127.0.0.1"
+    
+    async def start_server(self):
+        """Start WebSocket server"""
         self.running = True
-        retry_count = 0
-        max_retries = 5
+        local_ip = self.get_local_ip()
         
-        while self.running and retry_count < max_retries:
-            try:
-                logger.info(f"🔄 Connecting to relay: {self.relay_url}")
-                
-                self.websocket = await websockets.connect(
-                    self.relay_url,
-                    ping_interval=15,      # Send ping every 15 seconds (faster than relay's 20s interval)
-                    ping_timeout=20,       # Wait 20 seconds for pong (relay has 10s timeout)
-                    close_timeout=10,      # Wait 10 seconds for close frame
-                    max_size=10*1024*1024  # 10MB max message size
-                )
-                
-                # Register as server
-                register_msg = {
-                    'type': 'register_server',
-                    'server_id': self.server_id
-                }
-                await self._safe_send(register_msg)
-                
-                logger.info(f"📡 Registered as server: '{self.server_id}'")
-                logger.info(f"Screen resolution: {self.screen_width}x{self.screen_height}")
-                logger.info("✅ Ready to accept client connections!")
-                logger.info(f"Clients should connect to relay and request server: '{self.server_id}'")
-                
-                # Handle messages from relay
-                await self.handle_relay_messages()
-                
-            except websockets.exceptions.WebSocketException as e:
-                retry_count += 1
-                logger.error(f"❌ Connection failed (attempt {retry_count}/{max_retries}): {e}")
-                if retry_count < max_retries:
-                    wait_time = min(5 * retry_count, 30)
-                    logger.info(f"Retrying in {wait_time} seconds...")
-                    await asyncio.sleep(wait_time)
-                else:
-                    logger.error("Max retries reached. Please check relay URL and try again.")
-                    break
-            except Exception as e:
-                logger.error(f"Unexpected error: {e}")
-                break
+        logger.info("=" * 70)
+        logger.info("🖥️  Local Remote Control Server")
+        logger.info("=" * 70)
+        logger.info(f"Server starting on {self.host}:{self.port}")
+        logger.info(f"Local IP: {local_ip}")
+        logger.info(f"Screen resolution: {self.screen_width}x{self.screen_height}")
+        logger.info("")
+        logger.info("Clients should connect to:")
+        logger.info(f"  ws://{local_ip}:{self.port}")
+        logger.info(f"  or ws://127.0.0.1:{self.port} (if on same machine)")
+        logger.info("=" * 70)
         
-        if self.websocket:
-            try:
-                await self.websocket.close()
-            except Exception as e:
-                logger.warning(f"Websocket close error during shutdown: {e}")
+        try:
+            async with websockets.serve(
+                self.handle_client, 
+                self.host, 
+                self.port,
+                ping_interval=30,
+                ping_timeout=60,
+                max_size=10*1024*1024
+            ):
+                logger.info("✅ Server is running and waiting for connections...")
+                await asyncio.Future()  # Run forever
+        except OSError as e:
+            if "address already in use" in str(e).lower():
+                logger.error(f"❌ Port {self.port} is already in use. Please choose a different port.")
+            else:
+                logger.error(f"❌ Server error: {e}")
+            raise
+
+def minimize_console():
+    """Minimize the console window on Windows"""
+    try:
+        if sys.platform == 'win32':
+            # Get console window handle
+            kernel32 = ctypes.windll.kernel32
+            user32 = ctypes.windll.user32
+            
+            SW_MINIMIZE = 6
+            hwnd = kernel32.GetConsoleWindow()
+            
+            if hwnd:
+                user32.ShowWindow(hwnd, SW_MINIMIZE)
+                logger.info("Console window minimized")
+    except Exception as e:
+        logger.warning(f"Could not minimize console: {e}")
 
 def main():
     """Main entry point"""
     # Auto-connect with defaults - no user interaction required
-    relay_url = sys.argv[1] if len(sys.argv) > 1 else "wss://ancient-bastion-15588-6a7ee50abf00.herokuapp.com"
-    server_id = sys.argv[2] if len(sys.argv) > 2 else "my_computer"
+    port = int(sys.argv[1]) if len(sys.argv) > 1 else 8765
     
-    server = RemoteControlServer(relay_url=relay_url, server_id=server_id)
+    server = LocalRemoteControlServer(port=port)
     
     try:
-        asyncio.run(server.connect_to_relay())
+        asyncio.run(server.start_server())
     except KeyboardInterrupt:
         pass  # Silent exit
     except Exception as e:
         logger.error(f"Server error: {e}")
     finally:
-        # Cleanup resources
-        server._stop_wifi_overlay()
         if server.keyboard_listener:
             try:
                 server.keyboard_listener.stop()
             except:
                 pass
         logger.info("✅ Server cleanup complete")
-        # Do not re-raise; allow graceful exit
 
 if __name__ == "__main__":
     main()

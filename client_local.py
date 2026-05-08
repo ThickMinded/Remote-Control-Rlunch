@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Remote Control Client - Controller side
-Displays remote screen and sends mouse/keyboard commands
-Connects through Replit relay to control remote computer
+Remote Control Client - Local Network Version
+Connects directly to server on local network
+No relay required
 """
 
 import asyncio
@@ -11,7 +11,7 @@ import json
 import base64
 import io
 import tkinter as tk
-from tkinter import messagebox, simpledialog
+from tkinter import messagebox
 from PIL import Image, ImageTk
 import logging
 import threading
@@ -21,8 +21,8 @@ import sys
 import os
 from datetime import datetime
 
-# Configure logging to both console and file
-file_handler = logging.FileHandler('client.log', mode='w', encoding='utf-8')
+# Configure logging
+file_handler = logging.FileHandler('client_local.log', mode='w', encoding='utf-8')
 file_handler.setLevel(logging.INFO)
 file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
 
@@ -36,30 +36,25 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 logger.info("=" * 60)
-logger.info("Client logging initialized - all events will be saved to client.log")
+logger.info("Local Client logging initialized")
 logger.info("=" * 60)
 
-class RemoteControlClient:
+class LocalRemoteControlClient:
     def __init__(self):
         self.root = tk.Tk()
-        self.root.title("Remote Control Client (via Relay)")
+        self.root.title("Remote Control Client (Local Network)")
         self.root.geometry("1024x768")
         
         self.websocket = None
         self.connected = False
         self.running = True
-        self.registered = False
-        self._ws_send_lock = None
         
         # Remote screen info
         self.remote_width = 1920
         self.remote_height = 1080
-        self.display_scale = 1.0
         
-        # Relay and server info
-        self.server_id = "my_computer"
-        self.last_relay_url = ""
-        self.last_server_id = ""
+        # Last used server URL
+        self.last_server_url = ""
         
         # Create UI
         self.create_ui()
@@ -69,23 +64,19 @@ class RemoteControlClient:
         self.frame_interval = 1.0 / self.fps
         self.last_frame_time = 0
         
-        # Track displayed image dimensions for accurate coordinate mapping
+        # Image display tracking
         self.displayed_img_width = 0
         self.displayed_img_height = 0
         self.img_offset_x = 0
         self.img_offset_y = 0
         
-        # Communication mode - simple banner display
+        # Communication mode
         self.communication_mode = False
         self.comm_banner = None
         
         # Mouse detached mode
         self.mouse_detached = False
         self.mouse_mode_indicator = None
-        
-        # Keep-alive for connection stability
-        self.last_activity_time = time.time()
-        self.heartbeat_task = None
         
         # Screenshot directory
         self.screenshot_dir = "screenshots"
@@ -94,22 +85,17 @@ class RemoteControlClient:
             logger.info(f"📸 Created screenshots directory: {self.screenshot_dir}")
         
     def create_ui(self):
-        """Create the user interface"""
-        # Top control panel
+        """Create user interface"""
+        # Control panel
         control_frame = tk.Frame(self.root, bg='#2b2b2b', height=50)
         control_frame.pack(side=tk.TOP, fill=tk.X)
         control_frame.pack_propagate(False)
         
         # Connection controls
-        tk.Label(control_frame, text="Relay URL:", bg='#2b2b2b', fg='white').pack(side=tk.LEFT, padx=5)
-        self.url_entry = tk.Entry(control_frame, width=30)
-        self.url_entry.insert(0, "wss://ancient-bastion-15588-6a7ee50abf00.herokuapp.com")
+        tk.Label(control_frame, text="Server IP:Port:", bg='#2b2b2b', fg='white').pack(side=tk.LEFT, padx=5)
+        self.url_entry = tk.Entry(control_frame, width=25)
+        self.url_entry.insert(0, "192.168.1.100:8765")
         self.url_entry.pack(side=tk.LEFT, padx=5)
-        
-        tk.Label(control_frame, text="Server ID:", bg='#2b2b2b', fg='white').pack(side=tk.LEFT, padx=5)
-        self.server_entry = tk.Entry(control_frame, width=15)
-        self.server_entry.insert(0, "my_computer")
-        self.server_entry.pack(side=tk.LEFT, padx=5)
         
         self.connect_btn = tk.Button(control_frame, text="Connect", command=self.toggle_connection, 
                                      bg='#4CAF50', fg='white', padx=10)
@@ -125,7 +111,7 @@ class RemoteControlClient:
                                 textvariable=self.fps_var, command=self.update_fps)
         fps_spinbox.pack(side=tk.LEFT, padx=5)
         
-        # Clipboard status indicator
+        # Clipboard indicator
         tk.Label(control_frame, text="📋 Auto-sync", bg='#2b2b2b', fg='#4CAF50', 
                 font=('Arial', 9)).pack(side=tk.LEFT, padx=10)
         
@@ -134,15 +120,11 @@ class RemoteControlClient:
                 font=('Arial', 9))
         self.mouse_mode_label.pack(side=tk.LEFT, padx=10)
         
-        # Screen display canvas
+        # Canvas for screen display
         self.canvas = tk.Canvas(self.root, bg='black', highlightthickness=0)
         self.canvas.pack(fill=tk.BOTH, expand=True)
         
-        # Communication overlay (initially hidden)
-        self.comm_overlay = None
-        self.comm_text_id = None
-        
-        # Bind mouse events
+        # Mouse event bindings
         self.canvas.bind('<Motion>', self.on_mouse_move)
         self.canvas.bind('<Button-1>', self.on_mouse_click)
         self.canvas.bind('<Button-3>', self.on_right_click)
@@ -151,11 +133,9 @@ class RemoteControlClient:
         self.canvas.bind('<ButtonRelease-1>', self.on_mouse_up)
         self.canvas.bind('<MouseWheel>', self.on_scroll)
         
-        # Bind keyboard events
+        # Keyboard event bindings
         self.canvas.bind('<KeyPress>', self.on_key_press)
         self.canvas.bind('<KeyRelease>', self.on_key_release)
-        
-        # Bind specific Ctrl+C and Ctrl+V combinations
         self.canvas.bind('<Control-c>', self.on_ctrl_c)
         self.canvas.bind('<Control-v>', self.on_ctrl_v)
         self.canvas.bind('<Control-backslash>', self.on_screenshot_key)
@@ -166,7 +146,7 @@ class RemoteControlClient:
         
         self.canvas.focus_set()
         
-        # Handle window close
+        # Window close handler
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
         
     def update_fps(self):
@@ -178,10 +158,9 @@ class RemoteControlClient:
         except ValueError:
             pass
     
-    def send_clipboard(self):
-        """Send local clipboard content to server"""
+    def auto_send_clipboard(self):
+        """Auto-send clipboard to server"""
         if not self.connected:
-            messagebox.showwarning("Not Connected", "Please connect to server first")
             return
         
         try:
@@ -192,71 +171,21 @@ class RemoteControlClient:
                     'text': clipboard_text
                 }
                 asyncio.run_coroutine_threadsafe(self.send_message(message), self.loop)
-                logger.info(f"📋 Sent clipboard to server: {len(clipboard_text)} chars")
-                messagebox.showinfo("Clipboard", f"Sent {len(clipboard_text)} characters to server")
-            else:
-                messagebox.showinfo("Clipboard", "Clipboard is empty")
+                logger.info(f"📋 Auto-synced clipboard: {len(clipboard_text)} chars")
         except Exception as e:
             logger.error(f"Clipboard send error: {e}")
-            messagebox.showerror("Error", f"Failed to send clipboard: {e}")
-    
-    def auto_send_clipboard(self):
-        """Automatically send clipboard after Ctrl+C (no popup)"""
-        if not self.connected:
-            return
-        
-        try:
-            clipboard_text = pyperclip.paste()
-            if clipboard_text:
-                message = {
-                    'type': 'clipboard_sync',
-                    'text': clipboard_text
-                }
-                asyncio.run_coroutine_threadsafe(self.send_message(message), self.loop)
-                logger.info(f"📋 Auto-synced clipboard to server: {len(clipboard_text)} chars")
-        except Exception as e:
-            logger.error(f"Auto clipboard send error: {e}")
-    
-    def get_clipboard(self):
-        """Request clipboard content from server"""
-        if not self.connected:
-            messagebox.showwarning("Not Connected", "Please connect to server first")
-            return
-        
-        try:
-            message = {'type': 'clipboard_request'}
-            asyncio.run_coroutine_threadsafe(self.send_message(message), self.loop)
-            logger.info("📋 Requested clipboard from server")
-        except Exception as e:
-            logger.error(f"Clipboard request error: {e}")
-            messagebox.showerror("Error", f"Failed to request clipboard: {e}")
-    
-    def auto_get_clipboard(self):
-        """Automatically request clipboard before Ctrl+V (no popup)"""
-        if not self.connected:
-            return
-        
-        try:
-            message = {'type': 'clipboard_request'}
-            asyncio.run_coroutine_threadsafe(self.send_message(message), self.loop)
-            logger.info("📋 Auto-requesting clipboard from server for paste")
-        except Exception as e:
-            logger.error(f"Auto clipboard request error: {e}")
     
     def get_normalized_coords(self, event):
-        """Convert canvas coordinates to normalized coordinates (0-1 range)"""
+        """Convert canvas coords to normalized coords"""
         if self.displayed_img_width == 0 or self.displayed_img_height == 0:
             return 0.0, 0.0
         
-        # Adjust for image offset (since image is centered on canvas)
         img_x = event.x - self.img_offset_x
         img_y = event.y - self.img_offset_y
         
-        # Convert to normalized coordinates based on displayed image size
         norm_x = img_x / self.displayed_img_width
         norm_y = img_y / self.displayed_img_height
         
-        # Clamp to valid range
         norm_x = max(0.0, min(1.0, norm_x))
         norm_y = max(0.0, min(1.0, norm_y))
         
@@ -266,21 +195,10 @@ class RemoteControlClient:
         """Send message to server"""
         if not (self.websocket and self.connected):
             return
-        # Check if websocket is still open
-        if self.websocket.closed:
-            logger.warning("Attempted to send on closed websocket - skipping")
-            return
         try:
-            payload = json.dumps(message)
-            lock = self._ws_send_lock
-            if lock:
-                async with lock:
-                    await self.websocket.send(payload)
-            else:
-                await self.websocket.send(payload)
+            await self.websocket.send(json.dumps(message))
         except Exception as e:
             logger.warning(f"Send error: {e}")
-            # Don't set connected=False - let the main receive loop handle it
     
     def on_mouse_move(self, event):
         """Handle mouse movement"""
@@ -297,7 +215,7 @@ class RemoteControlClient:
     
     def on_mouse_click(self, event):
         """Handle mouse click"""
-        self.canvas.focus_set()  # Ensure canvas has focus for keyboard events
+        self.canvas.focus_set()
         if self.connected:
             norm_x, norm_y = self.get_normalized_coords(event)
             message = {
@@ -369,7 +287,7 @@ class RemoteControlClient:
         """Handle mouse scroll"""
         if self.connected:
             norm_x, norm_y = self.get_normalized_coords(event)
-            scroll_amount = event.delta // 120  # Normalize scroll amount
+            scroll_amount = event.delta // 120
             message = {
                 'type': 'mouse',
                 'event': 'scroll',
@@ -381,14 +299,13 @@ class RemoteControlClient:
             asyncio.run_coroutine_threadsafe(self.send_message(message), self.loop)
     
     def on_key_press(self, event):
-        """Handle key press with automatic clipboard sync"""
+        """Handle key press"""
         if self.connected:
             key = event.keysym
             
-            # Skip Ctrl+C and Ctrl+V as they're handled by specific bindings
             is_ctrl = (event.state & 0x4) or (event.state & 0x40000)
             if is_ctrl and key.lower() in ['c', 'v']:
-                return  # Let the specific handlers deal with these
+                return
             
             message = {
                 'type': 'keyboard',
@@ -398,7 +315,7 @@ class RemoteControlClient:
             asyncio.run_coroutine_threadsafe(self.send_message(message), self.loop)
     
     def send_paste_command(self):
-        """Send Ctrl+V paste command to server"""
+        """Send Ctrl+V to server"""
         if self.connected:
             message = {
                 'type': 'keyboard',
@@ -406,45 +323,39 @@ class RemoteControlClient:
                 'key': 'v'
             }
             asyncio.run_coroutine_threadsafe(self.send_message(message), self.loop)
-            logger.info("📋 Sent paste command to server")
+            logger.info("📋 Sent paste command")
     
     def sync_from_server_clipboard(self):
         """Get clipboard from server after Ctrl+C"""
         if self.connected:
             message = {'type': 'clipboard_request'}
             asyncio.run_coroutine_threadsafe(self.send_message(message), self.loop)
-            logger.info("📋 Requesting clipboard from server after copy")
+            logger.info("📋 Requesting clipboard from server")
     
     def on_ctrl_c(self, event):
-        """Handle Ctrl+C - copy on server then sync to client"""
+        """Handle Ctrl+C"""
         if not self.connected:
             return
         
-        logger.info("📋 Ctrl+C pressed - copying on server")
-        # Send Ctrl+C to server
+        logger.info("📋 Ctrl+C - copying on server")
         message = {
             'type': 'keyboard',
             'event': 'press',
             'key': 'c'
         }
         asyncio.run_coroutine_threadsafe(self.send_message(message), self.loop)
-        
-        # Request clipboard from server after copy completes
         self.root.after(300, self.sync_from_server_clipboard)
-        return "break"  # Prevent default Tkinter behavior
+        return "break"
     
     def on_ctrl_v(self, event):
-        """Handle Ctrl+V - sync client clipboard to server then paste"""
+        """Handle Ctrl+V"""
         if not self.connected:
             return
         
-        logger.info("📋 Ctrl+V pressed - syncing clipboard to server")
-        # Send local clipboard to server first
+        logger.info("📋 Ctrl+V - syncing clipboard to server")
         self.auto_send_clipboard()
-        
-        # Then send paste command after clipboard sync
         self.root.after(300, self.send_paste_command)
-        return "break"  # Prevent default Tkinter behavior
+        return "break"
     
     def on_key_release(self, event):
         """Handle key release"""
@@ -458,7 +369,7 @@ class RemoteControlClient:
             asyncio.run_coroutine_threadsafe(self.send_message(message), self.loop)
     
     def on_screenshot_key(self, event):
-        r"""Handle Ctrl+\ screenshot shortcut"""
+        """Handle Ctrl+\ screenshot shortcut"""
         if not self.connected:
             return
         
@@ -466,8 +377,7 @@ class RemoteControlClient:
         message = {'type': 'screenshot_request'}
         asyncio.run_coroutine_threadsafe(self.send_message(message), self.loop)
         self.show_screenshot_notification()
-        return "break"
-    
+        return "break"    
     def toggle_mouse_mode(self, event=None):
         """Toggle between attached and detached mouse mode"""
         self.mouse_detached = not self.mouse_detached
@@ -481,7 +391,71 @@ class RemoteControlClient:
             self.mouse_mode_label.config(text="🖱️ Attached", fg='#4CAF50')
             self.show_mouse_mode_notification("Mouse Attached")
         
-        return "break"
+        return "break"    
+    def display_frame(self, frame_data):
+        """Display frame on canvas"""
+        try:
+            img_bytes = base64.b64decode(frame_data['data'])
+            img = Image.open(io.BytesIO(img_bytes))
+            
+            canvas_width = self.canvas.winfo_width()
+            canvas_height = self.canvas.winfo_height()
+            
+            if canvas_width > 1 and canvas_height > 1:
+                img.thumbnail((canvas_width, canvas_height), Image.Resampling.BILINEAR)
+                
+                self.displayed_img_width = img.width
+                self.displayed_img_height = img.height
+                self.img_offset_x = (canvas_width - img.width) // 2
+                self.img_offset_y = (canvas_height - img.height) // 2
+                
+                photo = ImageTk.PhotoImage(img)
+                
+                self.canvas.delete("all")
+                self.canvas.create_image(canvas_width//2, canvas_height//2, 
+                                        image=photo, anchor=tk.CENTER)
+                self.canvas.image = photo
+                
+                if self.communication_mode:
+                    self.show_communication_banner()
+                
+        except Exception as e:
+            logger.error(f"Display error: {e}")
+    
+    def toggle_communication_display(self, enabled):
+        """Toggle communication mode display"""
+        self.communication_mode = enabled
+        if enabled:
+            logger.info("💬 Communication mode enabled")
+            self.show_communication_banner()
+        else:
+            logger.info("💬 Communication mode disabled")
+            self.hide_communication_banner()
+    
+    def show_communication_banner(self):
+        """Show communication banner"""
+        if self.comm_banner:
+            return
+        canvas_width = self.canvas.winfo_width()
+        self.comm_banner = self.canvas.create_rectangle(
+            0, 0, canvas_width, 40,
+            fill='#4CAF50', outline=''
+        )
+        self.canvas.create_text(
+            canvas_width // 2, 20,
+            text="💬 Communication Mode Active",
+            fill='white',
+            font=('Arial', 12, 'bold'),
+            tags='comm_banner_text'
+        )
+        self.canvas.tag_raise('comm_banner_text')
+    
+    def hide_communication_banner(self):
+        """Hide communication banner"""
+        if self.comm_banner:
+            self.canvas.delete(self.comm_banner)
+            self.canvas.delete('comm_banner_text')
+            self.comm_banner = None
     
     def save_screenshot(self, data):
         """Save screenshot to local file"""
@@ -548,106 +522,13 @@ class RemoteControlClient:
         self.root.after(2000, lambda: self.canvas.delete(notification))
         self.root.after(2000, lambda: self.canvas.delete(text))
     
-    def display_frame(self, frame_data):
-        """Display received frame on canvas"""
-        try:
-            # Decode base64 image
-            img_bytes = base64.b64decode(frame_data['data'])
-            img = Image.open(io.BytesIO(img_bytes))
-            
-            # Get canvas size
-            canvas_width = self.canvas.winfo_width()
-            canvas_height = self.canvas.winfo_height()
-            
-            if canvas_width > 1 and canvas_height > 1:
-                # Store original size before thumbnail
-                original_width, original_height = img.size
-                
-                # Resize to fit canvas while maintaining aspect ratio
-                img.thumbnail((canvas_width, canvas_height), Image.Resampling.BILINEAR)
-                
-                # Store actual displayed image size and offset
-                self.displayed_img_width = img.width
-                self.displayed_img_height = img.height
-                self.img_offset_x = (canvas_width - img.width) // 2
-                self.img_offset_y = (canvas_height - img.height) // 2
-                
-                # Convert to PhotoImage
-                photo = ImageTk.PhotoImage(img)
-                
-                # Display on canvas
-                self.canvas.delete("all")
-                self.canvas.create_image(canvas_width//2, canvas_height//2, 
-                                        image=photo, anchor=tk.CENTER)
-                self.canvas.image = photo  # Keep reference
-                
-                # Redraw communication banner if active
-                if self.communication_mode:
-                    self.show_communication_banner()
-                
-        except Exception as e:
-            logger.error(f"Display frame error: {e}")
-    
-    def toggle_communication_display(self, enabled):
-        """Toggle communication mode display"""
-        self.communication_mode = enabled
-        if enabled:
-            logger.info("💬 Communication mode enabled")
-            self.show_communication_banner()
-        else:
-            logger.info("💬 Communication mode disabled")
-            self.hide_communication_banner()
-    
-    def show_communication_banner(self):
-        """Show communication mode banner at top of canvas"""
-        if self.comm_banner:
-            return
-        canvas_width = self.canvas.winfo_width()
-        # Create banner at top
-        self.comm_banner = self.canvas.create_rectangle(
-            0, 0, canvas_width, 40,
-            fill='#4CAF50', outline=''
-        )
-        self.canvas.create_text(
-            canvas_width // 2, 20,
-            text="💬 Communication Mode Active - Server can see your typing",
-            fill='white',
-            font=('Arial', 12, 'bold'),
-            tags='comm_banner_text'
-        )
-        self.canvas.tag_raise('comm_banner_text')
-    
-    def hide_communication_banner(self):
-        """Hide communication mode banner"""
-        if self.comm_banner:
-            self.canvas.delete(self.comm_banner)
-            self.canvas.delete('comm_banner_text')
-            self.comm_banner = None
-    
-    async def send_heartbeat(self):
-        """Send periodic heartbeat to keep connection alive"""
-        while self.connected:
-            try:
-                await asyncio.sleep(10)  # Send heartbeat every 10 seconds
-                if self.connected:
-                    self.last_activity_time = time.time()
-                    await self.send_message({'type': 'heartbeat'})
-                    logger.debug("💓 Heartbeat sent")
-            except Exception as e:
-                logger.error(f"Heartbeat error: {e}")
-                break
-    
     async def receive_frames(self):
-        """Continuously request and receive frames"""
-        # First request screen info
+        """Receive frames from server"""
+        # Request screen info
         await self.send_message({'type': 'info_request'})
         
-        # Start heartbeat task
-        self.heartbeat_task = asyncio.create_task(self.send_heartbeat())
-        
         while self.connected:
             try:
-                # Skip frame request if we're behind (frame still processing)
                 current_time = time.time()
                 if current_time - self.last_frame_time < self.frame_interval:
                     await asyncio.sleep(0.01)
@@ -655,15 +536,14 @@ class RemoteControlClient:
                 
                 self.last_frame_time = current_time
                 
-                # Request frame with optimized settings
+                # Request frame
                 await self.send_message({
                     'type': 'request_frame',
-                    'quality': 75,  # Lower quality for faster transfer
-                    'scale': 0.7    # More aggressive scaling for speed
+                    'quality': 75,
+                    'scale': 0.7
                 })
                 
-                # Wait for frame with reasonable timeout
-                message = await asyncio.wait_for(self.websocket.recv(), timeout=10.0)
+                message = await asyncio.wait_for(self.websocket.recv(), timeout=5.0)
                 data = json.loads(message)
                 msg_type = data.get('type')
                 
@@ -674,13 +554,11 @@ class RemoteControlClient:
                     self.remote_height = data.get('screen_height', 1080)
                     logger.info(f"Remote screen: {self.remote_width}x{self.remote_height}")
                 elif msg_type == 'clipboard_data':
-                    # Received clipboard content from server
                     clipboard_text = data.get('text', '')
                     if clipboard_text:
                         pyperclip.copy(clipboard_text)
-                        logger.info(f"📋 Clipboard synced from server: {len(clipboard_text)} chars")
+                        logger.info(f"📋 Clipboard synced: {len(clipboard_text)} chars")
                 elif msg_type == 'communication_mode':
-                    # Communication mode toggled on server
                     enabled = data.get('enabled', False)
                     self.root.after(0, self.toggle_communication_display, enabled)
                 elif msg_type == 'screenshot_data':
@@ -688,96 +566,47 @@ class RemoteControlClient:
                 elif msg_type == 'screenshot_error':
                     error = data.get('error', '')
                     logger.error(f"📸 Screenshot error: {error}")
-                elif msg_type == 'server_disconnected':
-                    logger.warning("Server disconnected")
-                    self.root.after(0, lambda: messagebox.showwarning("Disconnected", "Server disconnected"))
-                    self.connected = False
-                    break
-                elif msg_type == 'error':
-                    error_msg = data.get('message', 'Unknown error')
-                    logger.error(f"Server error: {error_msg}")
-                    self.root.after(0, lambda: messagebox.showerror("Error", error_msg))
-                    self.connected = False
-                    break
                 
             except asyncio.TimeoutError:
-                logger.debug("Frame timeout - continuing...")
-                # Don't break on timeout, just continue requesting frames
                 continue
-            except websockets.exceptions.ConnectionClosed as e:
-                logger.warning(f"⚠️ Connection closed: code={getattr(e, 'code', '?')} reason={getattr(e, 'reason', '?')}")
+            except websockets.exceptions.ConnectionClosed:
+                logger.warning("⚠️ Connection closed")
                 self.connected = False
-                # Cancel heartbeat task
-                if self.heartbeat_task:
-                    self.heartbeat_task.cancel()
-                    self.heartbeat_task = None
-                self.root.after(0, lambda: self.status_label.config(text="Disconnected (reconnecting...)", fg='orange'))
-                # Try to reconnect automatically for abnormal closes
-                if self.running:
-                    logger.info("Attempting automatic reconnection...")
-                    self.root.after(2000, self._schedule_reconnect)
                 break
-            except json.JSONDecodeError as e:
-                logger.error(f"Invalid JSON received: {e}")
-                continue
             except Exception as e:
-                logger.error(f"Receive frame error: {e}")
-                # Cancel heartbeat task on error
-                if self.heartbeat_task:
-                    self.heartbeat_task.cancel()
-                    self.heartbeat_task = None
+                logger.error(f"Receive error: {e}")
                 break
-
-    def _schedule_reconnect(self):
-        """Attempt reconnect if still running and not connected"""
-        if self.connected or not self.running:
-            return
-        relay_url = self.last_relay_url or self.url_entry.get().strip()
-        server_id = self.last_server_id or self.server_entry.get().strip()
-        if relay_url and server_id:
-            logger.info(f"Reconnecting to {server_id} via {relay_url}...")
-            asyncio.run_coroutine_threadsafe(self.connect_to_server(relay_url, server_id), self.loop)
     
-    async def connect_to_server(self, relay_url, server_id):
-        """Connect to relay server and request specific server"""
+    async def connect_to_server(self, server_url):
+        """Connect to server"""
         try:
-            self.last_relay_url = relay_url
-            self.last_server_id = server_id
-            logger.info(f"Connecting to relay: {relay_url}")
-            self.websocket = await websockets.connect(
-                relay_url, 
-                ping_interval=15,  # Send ping every 15 seconds (faster than relay's 20s interval)
-                ping_timeout=20,   # Wait 20 seconds for pong (relay has 10s timeout)
-                close_timeout=10,  # Wait 10 seconds for close frame
-                max_size=10*1024*1024  # 10MB max message size
+            self.last_server_url = server_url
+            
+            # Add ws:// if not present
+            if not server_url.startswith('ws://'):
+                server_url = f'ws://{server_url}'
+            
+            logger.info(f"Connecting to {server_url}")
+            
+            # Try connection with timeout
+            self.websocket = await asyncio.wait_for(
+                websockets.connect(
+                    server_url,
+                    ping_interval=30,
+                    ping_timeout=60,
+                    close_timeout=10,
+                    max_size=10*1024*1024
+                ),
+                timeout=10.0
             )
-            if not self._ws_send_lock:
-                self._ws_send_lock = asyncio.Lock()
             
-            # Register as client and request server
-            register_msg = {
-                'type': 'register_client',
-                'server_id': server_id
-            }
-            await self.websocket.send(json.dumps(register_msg))
+            self.connected = True
+            logger.info(f"✅ Connected to server")
             
-            # Wait for registration confirmation
-            response = await asyncio.wait_for(self.websocket.recv(), timeout=10.0)
-            data = json.loads(response)
+            self.root.after(0, lambda: self.status_label.config(text="Connected", fg='green'))
+            self.root.after(0, lambda: self.connect_btn.config(text="Disconnect"))
             
-            if data.get('type') == 'registered' and data.get('status') == 'success':
-                self.connected = True
-                self.registered = True
-                logger.info(f"✅ Connected to server '{server_id}' via relay")
-                
-                self.root.after(0, lambda: self.status_label.config(text=f"Connected to {server_id}", fg='green'))
-                self.root.after(0, lambda: self.connect_btn.config(text="Disconnect"))
-                
-                # Start receiving frames
-                await self.receive_frames()
-            elif data.get('type') == 'error':
-                error_msg = data.get('message', 'Connection failed')
-                raise Exception(error_msg)
+            await self.receive_frames()
             
         except Exception as e:
             logger.error(f"Connection error: {e}")
@@ -786,36 +615,19 @@ class RemoteControlClient:
                                                            f"Failed to connect:\n{str(e)}"))
             self.root.after(0, lambda: self.status_label.config(text="Disconnected", fg='red'))
             self.root.after(0, lambda: self.connect_btn.config(text="Connect"))
-            # Schedule retry on failure (e.g., 1006) if still running
-            if self.running:
-                logger.info("Connection failed, will retry in 3 seconds...")
-                self.root.after(3000, self._schedule_reconnect)
     
     def toggle_connection(self):
-        """Toggle connection to server"""
+        """Toggle connection"""
         if not self.connected:
-            relay_url = self.url_entry.get().strip()
-            server_id = self.server_entry.get().strip()
+            server_url = self.url_entry.get().strip()
             
-            if not relay_url:
-                messagebox.showwarning("Invalid URL", "Please enter a relay URL")
+            if not server_url:
+                messagebox.showwarning("Invalid", "Please enter server IP:Port")
                 return
             
-            if not server_id:
-                messagebox.showwarning("Invalid Server ID", "Please enter a server ID")
-                return
-            
-            self.server_id = server_id
-            
-            # Start connection in background
-            asyncio.run_coroutine_threadsafe(self.connect_to_server(relay_url, server_id), self.loop)
+            asyncio.run_coroutine_threadsafe(self.connect_to_server(server_url), self.loop)
         else:
-            # Disconnect
             self.connected = False
-            # Cancel heartbeat task
-            if self.heartbeat_task:
-                self.heartbeat_task.cancel()
-                self.heartbeat_task = None
             if self.websocket:
                 asyncio.run_coroutine_threadsafe(self.websocket.close(), self.loop)
             self.status_label.config(text="Disconnected", fg='red')
@@ -826,54 +638,46 @@ class RemoteControlClient:
         """Handle window close"""
         self.running = False
         self.connected = False
-        # Cancel heartbeat task
-        if self.heartbeat_task:
-            self.heartbeat_task.cancel()
-            self.heartbeat_task = None
         if self.websocket:
             asyncio.run_coroutine_threadsafe(self.websocket.close(), self.loop)
         self.root.quit()
     
     def run_async_loop(self):
-        """Run asyncio event loop in background thread"""
+        """Run asyncio loop in background"""
         self.loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self.loop)
         self.loop.run_forever()
     
     def start(self):
-        """Start the client"""
-        # Start asyncio loop in background thread
+        """Start client"""
         async_thread = threading.Thread(target=self.run_async_loop, daemon=True)
         async_thread.start()
-        
-        # Start tkinter main loop
         self.root.mainloop()
 
 def main():
     """Main entry point"""
     print("=" * 70)
-    print("🎮 Remote Control Client (Controller)")
+    print("🎮 Remote Control Client (Local Network)")
     print("=" * 70)
-    print("Use this to control a remote computer via Replit relay")
-    print("Enter the Replit relay URL and target server ID")
+    print("Direct connection to server on local network")
+    print("Example: 192.168.1.100:8765")
     print("=" * 70)
     
-    client = RemoteControlClient()
+    client = LocalRemoteControlClient()
     try:
         client.start()
     except KeyboardInterrupt:
-        print("\n🛑 Client stopped by user")
+        print("\n🛑 Client stopped")
     except Exception as e:
         logger.error(f"Client error: {e}")
     finally:
-        # Cleanup
         client.running = False
         if client.websocket:
             try:
                 asyncio.run(client.websocket.close())
             except:
                 pass
-        logger.info("✅ Client cleanup complete")
+        logger.info("✅ Cleanup complete")
 
 if __name__ == "__main__":
     main()

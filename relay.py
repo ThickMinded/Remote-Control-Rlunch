@@ -13,6 +13,9 @@ from datetime import datetime
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Suppress websockets upgrade requirement logs
+logging.getLogger('websockets.server').setLevel(logging.WARNING)
+
 class RelayServer:
     def __init__(self, host='0.0.0.0', port=8765):
         self.host = host
